@@ -29,26 +29,51 @@ StratHooks implements both `AbstractPMPAugmentHook` and `AbstractPMPConfigureHoo
 ├── script/
 │   └── Deploy.s.sol            # Deployment script
 ├── lib/
-│   ├── openzeppelin-contracts/ # OpenZeppelin v5.0.0
-│   ├── solady/                 # Solady utilities (SSTORE2)
-│   └── forge-std/              # Foundry standard library
-└── foundry.toml                # Foundry configuration
+│   ├── openzeppelin-contracts/     # OpenZeppelin v5.0.0
+│   ├── solady/                     # Solady utilities (SSTORE2)
+│   ├── guarded-eth-token-swapper/  # ETH<->Token swapper with MEV protection
+│   └── forge-std/                  # Foundry standard library
+└── foundry.toml                    # Foundry configuration
 ```
 
 ## Setup
 
+### Dependencies
+
 This project uses:
 - **Solidity**: 0.8.22
-- **OpenZeppelin**: v5.0.0
-- **Art Blocks Contracts**: Local copies from main branch (not a submodule)
-- **Solady**: For SSTORE2 utilities
+- **OpenZeppelin v5.0.0**: Installed as submodule in `lib/openzeppelin-contracts`
+- **Solady**: Installed as submodule in `lib/solady` (provides SSTORE2)
+- **forge-std**: Installed as submodule in `lib/forge-std`
+- **GuardedEthTokenSwapper**: Installed as submodule in `lib/guarded-eth-token-swapper` ([View on GitHub](https://github.com/ryley-o/GuardedEthTokenSwapper))
+- **Art Blocks Contracts**: **Local copies** in `src/abstract/`, `src/interfaces/`, and `src/libs/` (NOT a submodule)
 
-### Why Local Copies?
+### GuardedEthTokenSwapper
 
-The Art Blocks contracts are copied locally rather than used as a submodule because:
-1. The PMP hooks are only available on the main branch, not in releases
-2. We need to modify import paths to use Solady's SSTORE2
-3. This gives us full control without modifying external dependencies
+The [GuardedEthTokenSwapper](https://github.com/ryley-o/GuardedEthTokenSwapper) is a production-ready contract deployed on Ethereum mainnet that provides:
+- **MEV Protection**: Uses Chainlink oracles to prevent sandwich attacks
+- **ETH → ERC20 Swaps**: Optimized for ETH pairs with Uniswap V3
+- **14 Supported Tokens**: WBTC, LINK, UNI, AAVE, and more
+- **Deployed at**: `0x96E6a25565E998C6EcB98a59CC87F7Fc5Ed4D7b0`
+- **Interface Available**: `IGuardedEthTokenSwapper.sol` for easy integration
+
+This contract can be integrated into your StratHooks to enable secure token swaps as part of the post-mint parameter configuration flow.
+
+**Usage Example:**
+```solidity
+import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthTokenSwapper.sol";
+
+address constant GUARDED_SWAPPER = 0x96E6a25565E998C6EcB98a59CC87F7Fc5Ed4D7b0;
+IGuardedEthTokenSwapper swapper = IGuardedEthTokenSwapper(GUARDED_SWAPPER);
+```
+
+### Why Local Art Blocks Contracts?
+
+The Art Blocks PMP hook contracts are copied locally rather than used as a submodule because:
+1. The PMP hooks are only available on the main branch, not in tagged releases
+2. We need to modify import paths to use Solady's SSTORE2 instead of their bundled version
+3. This gives us full control without modifying external git submodules
+4. Keeps the dependency tree clean and version-controlled within this repo
 
 ### Installation
 
@@ -57,8 +82,8 @@ The Art Blocks contracts are copied locally rather than used as a submodule beca
 git clone <your-repo-url>
 cd StratHooks
 
-# Install dependencies (already installed)
-forge install
+# Install submodule dependencies (if not already present)
+git submodule update --init --recursive
 
 # Build
 forge build
@@ -126,19 +151,26 @@ Returns the augmented parameter array.
 
 See the inline comments in `StratHooks.sol` for guidance.
 
-## Dependencies
+## Import Remappings
 
-The project uses remappings for external dependencies:
+The project uses Foundry remappings for external submodule dependencies only:
 
 ```toml
 remappings = [
-    "@openzeppelin-5.0/=lib/openzeppelin-contracts/",
-    "forge-std/=lib/forge-std/src/",
-    "solady/=lib/solady/src/"
+    "@openzeppelin-5.0/=lib/openzeppelin-contracts/",        # OpenZeppelin contracts
+    "forge-std/=lib/forge-std/src/",                         # Foundry test utilities
+    "solady/=lib/solady/src/",                               # Solady (SSTORE2)
+    "guarded-eth-token-swapper/=lib/guarded-eth-token-swapper/src/"  # MEV-protected token swapper
 ]
 ```
 
-Art Blocks contracts are stored locally in `src/abstract/`, `src/interfaces/`, and `src/libs/` directories.
+**Note:** Art Blocks contracts do NOT use remappings. They are imported directly as local files:
+- `src/abstract/AbstractPMPAugmentHook.sol`
+- `src/abstract/AbstractPMPConfigureHook.sol`
+- `src/interfaces/*.sol`
+- `src/libs/ImmutableStringArray.sol`
+
+This approach avoids submodule complications and gives us full control over these files.
 
 ## License
 

@@ -5,10 +5,13 @@ libs = ["lib"]
 solc = "0.8.22"
 evm_version = "paris"
 
+# Remappings for external dependencies
+# Note: Art Blocks contracts are stored locally in src/abstract/, src/interfaces/, and src/libs/
 remappings = [
     "@openzeppelin-5.0/=lib/openzeppelin-contracts/",
     "forge-std/=lib/forge-std/src/",
-    "solady/=lib/solady/src/"
+    "solady/=lib/solady/src/",
+    "guarded-eth-token-swapper/=lib/guarded-eth-token-swapper/src/"
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

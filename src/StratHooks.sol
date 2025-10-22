@@ -24,6 +24,10 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook {
     // Example:
     // address public immutable SOME_EXTERNAL_CONTRACT;
     // bytes32 internal constant _HASHED_KEY_EXAMPLE = keccak256("Example Key");
+    
+    // Example: GuardedEthTokenSwapper integration
+    // import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthTokenSwapper.sol";
+    // address public constant GUARDED_SWAPPER = 0x96E6a25565E998C6EcB98a59CC87F7Fc5Ed4D7b0;
 
     /**
      * @notice Constructor

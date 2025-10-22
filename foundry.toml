@@ -9,6 +9,7 @@ evm_version = "paris"
 # Note: Art Blocks contracts are stored locally in src/abstract/, src/interfaces/, and src/libs/
 remappings = [
     "@openzeppelin-5.0/=lib/openzeppelin-contracts/",
+    "@chainlink/=lib/chainlink-brownie-contracts/contracts/src/",
     "forge-std/=lib/forge-std/src/",
     "solady/=lib/solady/src/",
     "guarded-eth-token-swapper/=lib/guarded-eth-token-swapper/src/"

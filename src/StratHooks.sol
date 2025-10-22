@@ -11,6 +11,8 @@ import {IPMPV0} from "./interfaces/IPMPV0.sol";
 import {IPMPConfigureHook} from "./interfaces/IPMPConfigureHook.sol";
 import {IPMPAugmentHook} from "./interfaces/IPMPAugmentHook.sol";
 
+import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
+
 /**
  * @title StratHooks
  * @author Art Blocks Inc. & Contributors
@@ -18,12 +20,34 @@ import {IPMPAugmentHook} from "./interfaces/IPMPAugmentHook.sol";
  * It supports both augment and configure hooks to enable custom parameter handling.
  * Configure hooks run during configuration to validate settings.
  * Augment hooks run during reads to inject or modify parameters.
+ * 
+ * Implements Chainlink Automation for automated upkeep of token states.
  */
-contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook {
-    // Add your custom state variables here
-    // Example:
-    // address public immutable SOME_EXTERNAL_CONTRACT;
-    // bytes32 internal constant _HASHED_KEY_EXAMPLE = keccak256("Example Key");
+contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, AutomationCompatibleInterface {
+    // ============================================
+    // Events
+    // ============================================
+    
+    /**
+     * @notice Emitted when upkeep is performed for a token
+     * @param tokenId The token ID that was updated
+     * @param round The round number for idempotency
+     * @param timestamp The timestamp when upkeep was performed
+     */
+    event UpkeepPerformed(uint256 indexed tokenId, uint256 indexed round, uint256 timestamp);
+    
+    // ============================================
+    // State Variables
+    // ============================================
+    
+    // Track the current round for each token (for idempotency)
+    mapping(uint256 => uint256) public tokenRound;
+    
+    // Track the last upkeep timestamp for each token
+    mapping(uint256 => uint256) public lastUpkeepTimestamp;
+    
+    // Track whether a specific round has been executed for a token
+    mapping(uint256 => mapping(uint256 => bool)) public roundExecuted;
     
     // Example: GuardedEthTokenSwapper integration
     // import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthTokenSwapper.sol";
@@ -115,6 +139,117 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook {
             super.supportsInterface(interfaceId);
     }
 
-    // Add any additional helper functions below this line
+    // ============================================
+    // Chainlink Automation Functions
+    // ============================================
+
+    /**
+     * @notice Checks if upkeep is needed for a token
+     * @dev This function is called off-chain by Chainlink Automation
+     * @param checkData ABI-encoded uint256 tokenId
+     * @return upkeepNeeded Boolean indicating if upkeep is needed
+     * @return performData ABI-encoded (uint256 tokenId, uint256 round) to pass to performUpkeep
+     */
+    function checkUpkeep(bytes calldata checkData)
+        external
+        view
+        override
+        returns (bool upkeepNeeded, bytes memory performData)
+    {
+        // Decode the tokenId from checkData
+        uint256 tokenId = abi.decode(checkData, (uint256));
+        
+        // Get the current round for this token
+        uint256 currentRound = tokenRound[tokenId];
+        
+        // Check if this round has already been executed
+        bool alreadyExecuted = roundExecuted[tokenId][currentRound];
+        
+        // Determine if upkeep is needed
+        // Add your custom logic here to determine when upkeep should be performed
+        // Example conditions:
+        // - Time-based: enough time has passed since last upkeep
+        // - Event-based: some condition has changed
+        // - State-based: token is in a state requiring action
+        
+        // Example: Perform upkeep if not yet executed for current round
+        // In a real implementation, you'd check specific conditions
+        upkeepNeeded = !alreadyExecuted && _shouldPerformUpkeep(tokenId);
+        
+        if (upkeepNeeded) {
+            // Encode tokenId and current round for idempotency
+            performData = abi.encode(tokenId, currentRound);
+        }
+        
+        return (upkeepNeeded, performData);
+    }
+
+    /**
+     * @notice Performs the upkeep for a token
+     * @dev This function is called on-chain by Chainlink Automation
+     * @param performData ABI-encoded (uint256 tokenId, uint256 round)
+     */
+    function performUpkeep(bytes calldata performData) external override {
+        // Decode tokenId and round
+        (uint256 tokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
+        
+        // Verify this is the current round (prevents stale upkeeps)
+        require(round == tokenRound[tokenId], "Stale upkeep");
+        
+        // Ensure idempotency: check if this round was already executed
+        require(!roundExecuted[tokenId][round], "Round already executed");
+        
+        // Mark this round as executed
+        roundExecuted[tokenId][round] = true;
+        
+        // Update last upkeep timestamp
+        lastUpkeepTimestamp[tokenId] = block.timestamp;
+        
+        // Increment the round for next upkeep
+        tokenRound[tokenId]++;
+        
+        // Perform the actual upkeep logic here
+        _performTokenUpkeep(tokenId, round);
+        
+        // Emit event
+        emit UpkeepPerformed(tokenId, round, block.timestamp);
+    }
+
+    // ============================================
+    // Internal Helper Functions
+    // ============================================
+
+    /**
+     * @notice Determines if upkeep should be performed for a token
+     * @dev Override this function with your custom logic
+     * @param tokenId The token ID to check
+     * @return bool True if upkeep should be performed
+     */
+    function _shouldPerformUpkeep(uint256 tokenId) internal view virtual returns (bool) {
+        // Add your custom condition logic here
+        // Example: Check if enough time has passed
+        // Example: Check if token state requires action
+        // Example: Check external conditions
+        
+        // Default implementation: always return false
+        // Override this in your implementation
+        return false;
+    }
+
+    /**
+     * @notice Performs the actual upkeep logic for a token
+     * @dev Override this function with your custom upkeep actions
+     * @param tokenId The token ID to perform upkeep for
+     * @param round The round number (for reference in your logic)
+     */
+    function _performTokenUpkeep(uint256 tokenId, uint256 round) internal virtual {
+        // Add your custom upkeep logic here
+        // Example: Execute a token swap
+        // Example: Update token parameters
+        // Example: Trigger external actions
+        
+        // This is where you'd implement your strategy-specific logic
+        // For example, calling GuardedEthTokenSwapper, updating PMPs, etc.
+    }
 }
 

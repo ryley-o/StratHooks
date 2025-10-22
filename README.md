@@ -43,6 +43,7 @@ StratHooks implements both `AbstractPMPAugmentHook` and `AbstractPMPConfigureHoo
 This project uses:
 - **Solidity**: 0.8.22
 - **OpenZeppelin v5.0.0**: Installed as submodule in `lib/openzeppelin-contracts`
+- **Chainlink Brownie Contracts v1.2.0**: Installed as submodule in `lib/chainlink-brownie-contracts` (Automation interfaces)
 - **Solady**: Installed as submodule in `lib/solady` (provides SSTORE2)
 - **forge-std**: Installed as submodule in `lib/forge-std`
 - **GuardedEthTokenSwapper**: Installed as submodule in `lib/guarded-eth-token-swapper` ([View on GitHub](https://github.com/ryley-o/GuardedEthTokenSwapper))
@@ -66,6 +67,37 @@ import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthToke
 address constant GUARDED_SWAPPER = 0x96E6a25565E998C6EcB98a59CC87F7Fc5Ed4D7b0;
 IGuardedEthTokenSwapper swapper = IGuardedEthTokenSwapper(GUARDED_SWAPPER);
 ```
+
+### Chainlink Automation
+
+StratHooks implements the [Chainlink AutomationCompatibleInterface](https://docs.chain.link/chainlink-automation) for automated upkeep of token states:
+
+- **Automated Execution**: Chainlink nodes automatically monitor and execute upkeep when needed
+- **Idempotent Design**: Uses `tokenId` + `round` for guaranteed idempotency
+- **Gas Efficient**: Off-chain checks via `checkUpkeep`, on-chain execution via `performUpkeep`
+- **Extensible**: Override `_shouldPerformUpkeep()` and `_performTokenUpkeep()` for custom logic
+
+**Key Features:**
+- **Round-based Execution**: Each token maintains a `round` counter that increments after each upkeep
+- **Duplicate Prevention**: Tracks executed rounds to prevent duplicate execution
+- **Stale Protection**: Validates that upkeep data matches current round before execution
+- **Per-Token Tracking**: Maintains independent state for each token
+
+**Implementation Pattern:**
+```solidity
+// Override to define when upkeep is needed
+function _shouldPerformUpkeep(uint256 tokenId) internal view override returns (bool) {
+    // Your custom logic (e.g., time-based, event-based, state-based)
+    return someCondition;
+}
+
+// Override to define what happens during upkeep
+function _performTokenUpkeep(uint256 tokenId, uint256 round) internal override {
+    // Your custom action (e.g., swap tokens, update parameters)
+}
+```
+
+See the [Chainlink Automation documentation](https://docs.chain.link/chainlink-automation) for more information on registering your upkeep.
 
 ### Why Local Art Blocks Contracts?
 
@@ -124,9 +156,11 @@ forge script script/Deploy.s.sol --rpc-url <your_rpc_url> --broadcast
 
 ### StratHooks.sol
 
-The main contract implements two key functions:
+The main contract implements multiple interfaces and provides extensible hooks:
 
-#### `onTokenPMPConfigure`
+#### Art Blocks PMP Hooks
+
+**`onTokenPMPConfigure`**
 Called when a user configures PostMintParameters for their token. Use this to:
 - Validate parameter values
 - Check ownership or permissions
@@ -134,13 +168,31 @@ Called when a user configures PostMintParameters for their token. Use this to:
 
 Revert to reject the configuration.
 
-#### `onTokenPMPReadAugmentation`
+**`onTokenPMPReadAugmentation`**
 Called when token parameters are read. Use this to:
 - Inject additional parameters
 - Modify existing parameters
 - Filter out parameters
 
 Returns the augmented parameter array.
+
+#### Chainlink Automation Interface
+
+**`checkUpkeep(bytes calldata checkData)`**
+- Called off-chain by Chainlink Automation nodes
+- Input: ABI-encoded `uint256 tokenId`
+- Returns: `(bool upkeepNeeded, bytes memory performData)`
+- The `performData` encodes `(uint256 tokenId, uint256 round)` for idempotency
+
+**`performUpkeep(bytes calldata performData)`**
+- Called on-chain when `checkUpkeep` returns `true`
+- Input: ABI-encoded `(uint256 tokenId, uint256 round)`
+- Ensures idempotency through round tracking
+- Prevents stale and duplicate executions
+
+**Protected Helper Functions** (override these in your implementation):
+- `_shouldPerformUpkeep(uint256 tokenId)`: Define upkeep conditions
+- `_performTokenUpkeep(uint256 tokenId, uint256 round)`: Define upkeep actions
 
 ## Customization
 
@@ -158,6 +210,7 @@ The project uses Foundry remappings for external submodule dependencies only:
 ```toml
 remappings = [
     "@openzeppelin-5.0/=lib/openzeppelin-contracts/",        # OpenZeppelin contracts
+    "@chainlink/=lib/chainlink-brownie-contracts/contracts/src/",  # Chainlink Automation
     "forge-std/=lib/forge-std/src/",                         # Foundry test utilities
     "solady/=lib/solady/src/",                               # Solady (SSTORE2)
     "guarded-eth-token-swapper/=lib/guarded-eth-token-swapper/src/"  # MEV-protected token swapper

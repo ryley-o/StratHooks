@@ -7,3 +7,6 @@
 [submodule "lib/solady"]
 	path = lib/solady
 	url = https://github.com/Vectorized/solady
+[submodule "lib/guarded-eth-token-swapper"]
+	path = lib/guarded-eth-token-swapper
+	url = https://github.com/ryley-o/GuardedEthTokenSwapper.git

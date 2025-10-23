@@ -12,6 +12,7 @@ import {IPMPConfigureHook} from "./interfaces/IPMPConfigureHook.sol";
 import {IPMPAugmentHook} from "./interfaces/IPMPAugmentHook.sol";
 
 import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title StratHooks
@@ -23,7 +24,7 @@ import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfac
  * 
  * Implements Chainlink Automation for automated upkeep of token states.
  */
-contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, AutomationCompatibleInterface {
+contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, AutomationCompatibleInterface, Ownable {
     // ============================================
     // Events
     // ============================================
@@ -39,7 +40,36 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     // ============================================
     // State Variables
     // ============================================
+
+    // latest received token id
+    uint256 public latestReceivedTokenId;
+
+    address public additionalPayeeReceiver;
+
+    // TODO - make this in sync
+    enum TokenType {
+        ZRX,
+        LINK,
+        USDT,
+        BAT,
+        COMP,
+        CRV,
+        AAVE,
+        UNI,
+        WBTC
+    }
+
+    struct TokenMetadata {
+        TokenType tokenType;
+        uint256 tokenBalance; // no decimals, raw value
+        uint256[] priceHistory; // price history for the token
+        uint128 createdAt; // timestamp when the token was created/first price history entry
+        uint32 intervalLengthSeconds; // length of each interval in seconds (12 intervals is total length)
+    }
     
+    // mapping of token id to token metadata
+    mapping(uint256 tokenId => TokenMetadata) public tokenMetadata;
+
     // Track the current round for each token (for idempotency)
     mapping(uint256 => uint256) public tokenRound;
     
@@ -53,12 +83,49 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     // import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthTokenSwapper.sol";
     // address public constant GUARDED_SWAPPER = 0x96E6a25565E998C6EcB98a59CC87F7Fc5Ed4D7b0;
 
+    modifier onlyAdditionalPayeeReceiver() {
+        require(msg.sender == additionalPayeeReceiver, "Not additional payee receiver");
+        _;
+    }
+
     /**
      * @notice Constructor
      * @dev Add any initialization parameters needed for your hooks
      */
-    constructor() {
+    constructor(address owner_, address additionalPayeeReceiver_) Ownable(owner_) {
         // Initialize any immutable state variables here
+        additionalPayeeReceiver = additionalPayeeReceiver_;
+    }
+
+    /**
+     * @notice Receive funds for a new token during mint, initializes the token metadata
+     * @dev Called by the additional payee receiver during mint
+     * @param tokenId The token id to receive funds for
+     * @param tokenHash The hash of the token to receive funds for
+     * @dev msg.value is the appropriate proportion of the mint price for the token
+     */
+    function receiveFunds(uint256 tokenId, bytes32 tokenHash) external payable onlyAdditionalPayeeReceiver {
+        // CHECKS
+        // only additional payee receiver may call
+        require(latestReceivedTokenId == 0 || latestReceivedTokenId == tokenId - 1, "Invalid token id");
+
+        // EFFECTS
+        latestReceivedTokenId = tokenId;
+        // build the token metadata
+        TokenType tokenType = TokenType(uint256(tokenHash) % 9); // 9 token types
+        uint256 intervalLengthSeconds = _getIntervalLengthSecondsFromTokenHash(tokenHash);
+        uint256 tokenBalance = 1; // TODO - implement swap
+        uint256 firstPriceHistoryEntry = tokenBalance/msg.value; // TODO what to record?
+        tokenMetadata[tokenId] = TokenMetadata({
+            tokenType: tokenType,
+            tokenBalance: msg.value,
+            priceHistory: new uint256[](12),
+            createdAt: uint128(block.timestamp),
+            intervalLengthSeconds: 12
+        });
+        // record the first price history entry
+        tokenMetadata[tokenId].priceHistory[0] = firstPriceHistoryEntry;
+
     }
 
     /**
@@ -250,6 +317,12 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         
         // This is where you'd implement your strategy-specific logic
         // For example, calling GuardedEthTokenSwapper, updating PMPs, etc.
+    }
+
+    function _getIntervalLengthSecondsFromTokenHash(bytes32 tokenHash) internal view virtual returns (uint32) {
+        // TODO - implement this better, this is a placeholder
+        // 5 days + 7 days * (tokenHash % 10)
+        return uint32((5 days) + (7 days * (uint256(tokenHash) % 10)));
     }
 }
 

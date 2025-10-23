@@ -11,8 +11,8 @@ remappings = [
     "@openzeppelin-5.0/=lib/openzeppelin-contracts/",
     "@chainlink/=lib/chainlink-brownie-contracts/contracts/src/",
     "forge-std/=lib/forge-std/src/",
-    "solady/=lib/solady/src/",
-    "guarded-eth-token-swapper/=lib/guarded-eth-token-swapper/src/"
+    "solady/=lib/solady/src/"
+    # "guarded-eth-token-swapper/=lib/guarded-eth-token-swapper/src/" # Disabled due to solc version incompatibility
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

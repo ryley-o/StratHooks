@@ -13,11 +13,13 @@ contract StratHooksTest is Test {
     
     address constant MOCK_CORE_CONTRACT = address(0x1);
     uint256 constant MOCK_TOKEN_ID = 1;
+    address constant OWNER = address(0x100);
+    address constant ADDITIONAL_PAYEE_RECEIVER = address(0x200);
 
     event UpkeepPerformed(uint256 indexed tokenId, uint256 indexed round, uint256 timestamp);
 
     function setUp() public {
-        hooks = new StratHooks();
+        hooks = new StratHooks(OWNER, ADDITIONAL_PAYEE_RECEIVER);
     }
 
     function test_SupportsInterfaces() public view {

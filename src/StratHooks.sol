@@ -10,6 +10,7 @@ import {IWeb3Call} from "./interfaces/IWeb3Call.sol";
 import {IPMPV0} from "./interfaces/IPMPV0.sol";
 import {IPMPConfigureHook} from "./interfaces/IPMPConfigureHook.sol";
 import {IPMPAugmentHook} from "./interfaces/IPMPAugmentHook.sol";
+import {IGuardedEthTokenSwapper} from "./interfaces/IGuardedEthTokenSwapper.sol";
 
 import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -44,23 +45,49 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     // keeper address allowed to perform upkeep
     address public keeper;
 
+    // additional payee receiver address allowed to assign funds to a token
     address public additionalPayeeReceiver;
+
+    // guarded eth token swapper address
+    IGuardedEthTokenSwapper public guardedEthTokenSwapper = IGuardedEthTokenSwapper(0x7FFc0E3F2aC6ba73ada2063D3Ad8c5aF554ED05f);
 
     // latest received token id
     uint256 public latestReceivedTokenId;
 
-    // TODO - make this in sync
+    // 14 token types, configured in GuardedEthTokenSwapper
     enum TokenType {
-        ZRX,
-        LINK,
-        USDT,
+        ONEINCH,
+        AAVE,
+        APE,
         BAT,
         COMP,
         CRV,
-        AAVE,
+        USDT,
+        LDO,
+        LINK,
+        MKR,
+        SHIB,
         UNI,
-        WBTC
+        WBTC,
+        ZRX
     }
+
+    address[] public tokenAddresses = [
+        0x111111111117dC0aa78b770fA6A738034120C302, // 1INCH
+        0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9, // AAVE
+        0x4d224452801ACEd8B2F0aebE155379bb5D594381, // APE
+        0x0D8775F648430679A709E98d2b0Cb6250d2887EF, // BAT
+        0xc00e94Cb662C3520282E6f5717214004A7f26888, // COMP
+        0xD533a949740bb3306d119CC777fa900bA034cd52, // CRV
+        0xdAC17F958D2ee523a2206206994597C13D831ec7, // USDT
+        0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32, // LDO
+        0x514910771AF9Ca656af840dff83E8264EcF986CA, // LINK
+        0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2, // MKR
+        0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE, // SHIB
+        0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984, // UNI
+        0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599, // WBTC
+        0xE41d2489571d322189246DaFA5ebDe1F4699F498 // ZRX
+    ];
 
     struct TokenMetadata {
         TokenType tokenType;
@@ -81,10 +108,6 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     
     // Track whether a specific round has been executed for a token
     mapping(uint256 => mapping(uint256 => bool)) public roundExecuted;
-    
-    // Example: GuardedEthTokenSwapper integration
-    // import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthTokenSwapper.sol";
-    // address public constant GUARDED_SWAPPER = 0x96E6a25565E998C6EcB98a59CC87F7Fc5Ed4D7b0;
 
     // modifier to only allow the additional payee receiver to receive funds
     modifier onlyAdditionalPayeeReceiver() {
@@ -127,6 +150,15 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     }
 
     /**
+     * @notice Set the guarded eth token swapper address
+     * @dev Only the owner can set the guarded eth token swapper address
+     * @param newGuardedEthTokenSwapper The new guarded eth token swapper address
+     */
+    function setGuardedEthTokenSwapper(address newGuardedEthTokenSwapper) external onlyOwner {
+        guardedEthTokenSwapper = IGuardedEthTokenSwapper(newGuardedEthTokenSwapper);
+    }
+
+    /**
      * @notice Receive funds for a new token during mint, initializes the token metadata
      * @dev Called by the additional payee receiver during mint
      * @param tokenId The token id to receive funds for
@@ -140,21 +172,51 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
 
         // EFFECTS
         latestReceivedTokenId = tokenId;
-        // build the token metadata
-        TokenType tokenType = TokenType(uint256(tokenHash) % 9); // 9 token types
-        uint256 intervalLengthSeconds = _getIntervalLengthSecondsFromTokenHash(tokenHash);
-        uint256 tokenBalance = 1; // TODO - implement swap
-        uint256 firstPriceHistoryEntry = tokenBalance/msg.value; // TODO what to record?
-        tokenMetadata[tokenId] = TokenMetadata({
-            tokenType: tokenType,
-            tokenBalance: msg.value,
-            priceHistory: new uint256[](12),
-            createdAt: uint128(block.timestamp),
-            intervalLengthSeconds: 12
+        // assign prng values
+        TokenType tokenType = TokenType(uint256(tokenHash) % 14); // 14 token types
+        address tokenAddress = _getTokenAddressFromTokenType(tokenType);
+        uint32 intervalLengthSeconds = _getIntervalLengthSecondsFromTokenHash(tokenHash);
+        // assign token metadata values
+        uint256 tokenBalance = guardedEthTokenSwapper.swapEthForToken({
+            token: tokenAddress,
+            slippageBps: 200, // 2% slippage
+            deadline: block.timestamp + 600 // 10 minutes
         });
+        TokenMetadata storage t = tokenMetadata[tokenId];
+        t.tokenType = tokenType;
+        t. tokenBalance = tokenBalance;
+        t.createdAt = uint128(block.timestamp);
+        t. intervalLengthSeconds = uint32(intervalLengthSeconds);
+        
         // record the first price history entry
-        tokenMetadata[tokenId].priceHistory[0] = firstPriceHistoryEntry;
+        // @dev we pull from the oracle for consistency
+        _appendPriceHistoryEntry(tokenId, tokenType);
 
+    }
+
+    /**
+     * @notice Append a price history entry to the token metadata.
+     * Internal function - assumes checks have been performed, blindly appends to the price history.
+     * @dev Internal function to append a price history entry to the token metadata
+     * @param tokenId The token id to append the price history entry for
+     * @param tokenType The token type to append the price history entry for
+     */
+    function _appendPriceHistoryEntry(uint256 tokenId, TokenType tokenType) internal {
+        // @dev we pull from the oracle for consistency
+        address tokenAddress = _getTokenAddressFromTokenType(tokenType);
+        (uint256 price, ) = guardedEthTokenSwapper.getTokenPrice(tokenAddress);
+        // populate result in tokenMetadata by appending to the price history
+        tokenMetadata[tokenId].priceHistory.push(price);
+    }
+
+    /**
+     * @notice Get the token address from the token type
+     * @dev Internal function to get the token address from the token type
+     * @param tokenType The token type to get the address for
+     * @return tokenAddress The token address
+     */
+    function _getTokenAddressFromTokenType(TokenType tokenType) internal view returns (address) {
+        return tokenAddresses[uint256(tokenType)];
     }
 
     /**
@@ -343,7 +405,7 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         // Example: Execute a token swap
         // Example: Update token parameters
         // Example: Trigger external actions
-        
+        // Example: Call GuardedEthTokenSwapper
         // This is where you'd implement your strategy-specific logic
         // For example, calling GuardedEthTokenSwapper, updating PMPs, etc.
     }

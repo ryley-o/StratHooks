@@ -41,10 +41,7 @@ interface IPMPV0 is IWeb3Call {
      * @param projectConfigNonce The nonce of the project configuration.
      */
     event ProjectConfigured(
-        address coreContract,
-        uint256 projectId,
-        PMPInputConfig[] pmpInputConfigs,
-        uint8 projectConfigNonce
+        address coreContract, uint256 projectId, PMPInputConfig[] pmpInputConfigs, uint8 projectConfigNonce
     );
 
     /**
@@ -54,12 +51,7 @@ interface IPMPV0 is IWeb3Call {
      * @param pmpInputs Array of parameter inputs that were configured.
      * @param authAddresses Array of addresses that authenticated the parameters. Aligned by index with pmpInputs.
      */
-    event TokenParamsConfigured(
-        address coreContract,
-        uint256 tokenId,
-        PMPInput[] pmpInputs,
-        address[] authAddresses
-    );
+    event TokenParamsConfigured(address coreContract, uint256 tokenId, PMPInput[] pmpInputs, address[] authAddresses);
 
     /**
      * @notice Emitted when the delegation registry is updated.
@@ -187,11 +179,8 @@ interface IPMPV0 is IWeb3Call {
      * @param projectId The project ID to configure parameters for.
      * @param pmpInputConfigs Array of parameter configurations defining the available parameters.
      */
-    function configureProject(
-        address coreContract,
-        uint256 projectId,
-        PMPInputConfig[] calldata pmpInputConfigs
-    ) external;
+    function configureProject(address coreContract, uint256 projectId, PMPInputConfig[] calldata pmpInputConfigs)
+        external;
 
     /**
      * @notice Configure the parameters for a specific token.
@@ -199,11 +188,7 @@ interface IPMPV0 is IWeb3Call {
      * @param tokenId The token ID to configure parameters for.
      * @param pmpInputs Array of parameter inputs to configure.
      */
-    function configureTokenParams(
-        address coreContract,
-        uint256 tokenId,
-        PMPInput[] calldata pmpInputs
-    ) external;
+    function configureTokenParams(address coreContract, uint256 tokenId, PMPInput[] calldata pmpInputs) external;
 
     /**
      * @notice Checks if the given wallet has the owner role for the given token.
@@ -218,9 +203,8 @@ interface IPMPV0 is IWeb3Call {
      * @return isTokenOwnerOrDelegate_ True if the wallet is the owner or a delegate of the token,
      * false otherwise.
      */
-    function isTokenOwnerOrDelegate(
-        address wallet,
-        address coreContract,
-        uint256 tokenId
-    ) external view returns (bool isTokenOwnerOrDelegate_);
+    function isTokenOwnerOrDelegate(address wallet, address coreContract, uint256 tokenId)
+        external
+        view
+        returns (bool isTokenOwnerOrDelegate_);
 }

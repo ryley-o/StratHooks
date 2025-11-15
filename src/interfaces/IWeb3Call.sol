@@ -21,8 +21,8 @@ interface IWeb3Call {
      * @param tokenId The tokenId of the token to get data for.
      * @return tokenParams An array of token parameters for the queried token.
      */
-    function getTokenParams(
-        address coreContract,
-        uint256 tokenId
-    ) external view returns (TokenParam[] memory tokenParams);
+    function getTokenParams(address coreContract, uint256 tokenId)
+        external
+        view
+        returns (TokenParam[] memory tokenParams);
 }

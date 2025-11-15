@@ -25,17 +25,11 @@ abstract contract AbstractPMPConfigureHook is IPMPConfigureHook, ERC165 {
      * @param tokenId The tokenId of the token that was configured.
      * @param pmpInput The PMP input that was used to successfully configure the token.
      */
-    function onTokenPMPConfigure(
-        address coreContract,
-        uint256 tokenId,
-        IPMPV0.PMPInput calldata pmpInput
-    ) external virtual;
+    function onTokenPMPConfigure(address coreContract, uint256 tokenId, IPMPV0.PMPInput calldata pmpInput)
+        external
+        virtual;
 
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public view virtual override(ERC165, IERC165) returns (bool) {
-        return
-            interfaceId == type(IPMPConfigureHook).interfaceId ||
-            super.supportsInterface(interfaceId);
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(IPMPConfigureHook).interfaceId || super.supportsInterface(interfaceId);
     }
 }

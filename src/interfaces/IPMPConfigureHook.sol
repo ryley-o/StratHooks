@@ -15,11 +15,7 @@ interface IPMPConfigureHook is IERC165 {
      * @param tokenId The tokenId of the token that was configured.
      * @param pmpInput The PMP input that was used to successfully configure the token.
      */
-    function onTokenPMPConfigure(
-        address coreContract,
-        uint256 tokenId,
-        IPMPV0.PMPInput calldata pmpInput
-    ) external;
+    function onTokenPMPConfigure(address coreContract, uint256 tokenId, IPMPV0.PMPInput calldata pmpInput) external;
 
     // @dev ERC156 function supportsInterface must be implemented and broadcast true for this interfaceId
 }

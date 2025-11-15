@@ -22,10 +22,7 @@ interface IPMPAugmentHook is IERC165 {
         address coreContract,
         uint256 tokenId,
         IWeb3Call.TokenParam[] calldata tokenParams
-    )
-        external
-        view
-        returns (IWeb3Call.TokenParam[] memory augmentedTokenParams);
+    ) external view returns (IWeb3Call.TokenParam[] memory augmentedTokenParams);
 
     // @dev ERC156 function supportsInterface must be implemented and broadcast true for this interfaceId
 }

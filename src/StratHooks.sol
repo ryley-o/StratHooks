@@ -11,6 +11,8 @@ import {IPMPV0} from "./interfaces/IPMPV0.sol";
 import {IPMPConfigureHook} from "./interfaces/IPMPConfigureHook.sol";
 import {IPMPAugmentHook} from "./interfaces/IPMPAugmentHook.sol";
 import {IGuardedEthTokenSwapper} from "./interfaces/IGuardedEthTokenSwapper.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -42,6 +44,10 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     // State Variables
     // ============================================
 
+    // PMPV0 contract address - hard-coded to mainnet
+    address public constant PMPV0_CONTRACT_ADDRESS = 0x00000000A78E278b2d2e2935FaeBe19ee9F1FF14;
+    address public immutable CORE_CONTRACT_ADDRESS;
+    uint256 public immutable PROJECT_ID;
     // keeper address allowed to perform upkeep
     address public keeper;
 
@@ -79,6 +85,7 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         uint256[] priceHistory; // price history for the token
         uint128 createdAt; // timestamp when the token was created/first price history entry
         uint32 intervalLengthSeconds; // length of each interval in seconds (12 intervals is total length)
+        bool isWithdrawn; // whether the token balance has been withdrawn (after all 12 rounds have been performed)
     }
 
     // mapping of token id to token metadata
@@ -100,10 +107,18 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
      * @notice Constructor
      * @dev Add any initialization parameters needed for your hooks
      */
-    constructor(address owner_, address additionalPayeeReceiver_, address keeper_) Ownable(owner_) {
+    constructor(
+        address owner_,
+        address additionalPayeeReceiver_,
+        address keeper_,
+        address coreContract_,
+        uint256 projectId_
+    ) Ownable(owner_) {
         // Initialize any immutable or mutable state variables here
         additionalPayeeReceiver = additionalPayeeReceiver_;
         keeper = keeper_;
+        CORE_CONTRACT_ADDRESS = coreContract_;
+        PROJECT_ID = projectId_;
     }
 
     /**
@@ -179,19 +194,32 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
      */
     function onTokenPMPConfigure(address coreContract, uint256 tokenId, IPMPV0.PMPInput calldata pmpInput)
         external
-        view
         override
     {
-        // Add your custom validation logic here
-        // This runs when a user configures PMPs for their token
+        // CHECKS
+        // only allow if PMPV0 is calling
+        require(msg.sender == PMPV0_CONTRACT_ADDRESS, "Only PMPV0 can call");
+        // only allow if core contract is the configured core contract
+        require(coreContract == CORE_CONTRACT_ADDRESS, "Core contract mismatch");
+        // only allow if token id is from the configured project id
+        require(tokenId / 1_000_000 == PROJECT_ID, "Project id mismatch");
+        // only allow if pmp input key is the configured pmp input key
+        require(keccak256(bytes(pmpInput.key)) == keccak256(bytes("IsWithdrawn")), "Invalid PMP input key");
+        // only allow if pmp input value is currently false
+        TokenMetadata storage t = tokenMetadata[tokenId];
+        require(!t.isWithdrawn, "Token already withdrawn");
+        // only allow setting to true
+        require(pmpInput.configuredValue == bytes32(uint256(1)), "Invalid PMP input value");
 
-        // Example: Check if specific keys are being configured
-        // if (keccak256(bytes(pmpInput.key)) == _HASHED_KEY_EXAMPLE) {
-        //     // Validate the configuration
-        //     require(someCondition, "Configuration validation failed");
-        // }
-
-        // If you don't revert, the configuration is accepted
+        // EFFECTS
+        // set the token to withdrawn
+        t.isWithdrawn = true;
+        // INTERACTIONS
+        // send the token balance to the token owner
+        address tokenOwner = IERC721(CORE_CONTRACT_ADDRESS).ownerOf(tokenId);
+        // send the token balance to the token owner
+        address tokenAddress = _getTokenAddressFromTokenType(t.tokenType);
+        IERC20(tokenAddress).transfer(tokenOwner, t.tokenBalance);
     }
 
     /**

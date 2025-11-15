@@ -30,17 +30,9 @@ abstract contract AbstractPMPAugmentHook is IPMPAugmentHook, ERC165 {
         address coreContract,
         uint256 tokenId,
         IWeb3Call.TokenParam[] calldata tokenParams
-    )
-        external
-        view
-        virtual
-        returns (IWeb3Call.TokenParam[] memory augmentedTokenParams);
+    ) external view virtual returns (IWeb3Call.TokenParam[] memory augmentedTokenParams);
 
-    function supportsInterface(
-        bytes4 interfaceId
-    ) public view virtual override(ERC165, IERC165) returns (bool) {
-        return
-            interfaceId == type(IPMPAugmentHook).interfaceId ||
-            super.supportsInterface(interfaceId);
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(IPMPAugmentHook).interfaceId || super.supportsInterface(interfaceId);
     }
 }

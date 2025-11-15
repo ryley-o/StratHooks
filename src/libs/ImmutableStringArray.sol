@@ -28,10 +28,7 @@ library ImmutableStringArray {
      * @param storageArray The storage reference to store the packed array.
      * @param strings The array of strings to pack.
      */
-    function store(
-        StringArray storage storageArray,
-        string[] memory strings
-    ) internal {
+    function store(StringArray storage storageArray, string[] memory strings) internal {
         uint256 arrayLength = strings.length;
         // edge case - empty array
         if (arrayLength == 0) {
@@ -49,18 +46,13 @@ library ImmutableStringArray {
         }
         // realistically will not overflow uint64, but check for security guarantees
         // @dev no coverage on else (difficulty of triggering)
-        require(
-            totalStringBytesLength <= type(uint64).max,
-            "Offset exceeds uint64 limit"
-        );
+        require(totalStringBytesLength <= type(uint64).max, "Offset exceeds uint64 limit");
 
         // prepare the combined storage structure (length + packed offsets + packed strings)
         // @dev 8 bytes for length, 8 bytes per offset, totalStringBytesLength bytes for strings
         // over-allocate 32 bytes for memory safety
         // note: shorten length by 32 bytes at end of function before returning
-        uint256 packedDataLength = 8 +
-            (arrayLength * 8) +
-            totalStringBytesLength;
+        uint256 packedDataLength = 8 + (arrayLength * 8) + totalStringBytesLength;
         bytes memory packedData = new bytes(packedDataLength + 0x20);
         uint256 ptr;
 
@@ -82,20 +74,20 @@ library ImmutableStringArray {
         }
 
         // pack the strings efficiently, using assembly to copy 32 bytes at a time
-        for (uint i = 0; i < arrayLength; i++) {
+        for (uint256 i = 0; i < arrayLength; i++) {
             bytes memory currentString = bytes(strings[i]);
-            uint currentLength = currentString.length;
-            uint currentPtr;
+            uint256 currentLength = currentString.length;
+            uint256 currentPtr;
 
             assembly ("memory-safe") {
                 currentPtr := add(currentString, 0x20) // start of current string's data
             }
 
             // copy the full 32-byte chunks
-            uint chunks = currentLength / 32;
-            uint remainder = currentLength % 32;
+            uint256 chunks = currentLength / 32;
+            uint256 remainder = currentLength % 32;
             // store the full 32 byte chunks
-            for (uint j = 0; j < chunks; j++) {
+            for (uint256 j = 0; j < chunks; j++) {
                 assembly ("memory-safe") {
                     let chunk := mload(currentPtr) // load 32 bytes of the current string
                     mstore(ptr, chunk) // store the 32 bytes into the result
@@ -130,9 +122,7 @@ library ImmutableStringArray {
      * @param storageArray The storage reference containing packed strings.
      * @return count The count of stored strings.
      */
-    function length(
-        StringArray storage storageArray
-    ) internal view returns (uint256 count) {
+    function length(StringArray storage storageArray) internal view returns (uint256 count) {
         // edge case - unassigned dataPointer or empty array
         if (storageArray.dataPointer == address(0)) {
             return 0;
@@ -153,10 +143,7 @@ library ImmutableStringArray {
      * @param index The index of the string to retrieve.
      * @return result The retrieved string.
      */
-    function get(
-        StringArray storage storageArray,
-        uint256 index
-    ) internal view returns (string memory result) {
+    function get(StringArray storage storageArray, uint256 index) internal view returns (string memory result) {
         // edge case - unassigned dataPointer or empty array
         if (storageArray.dataPointer == address(0)) {
             revert("Index out of bounds");
@@ -222,9 +209,7 @@ library ImmutableStringArray {
      * @param storageArray The storage reference containing packed strings.
      * @return results An array of all stored strings.
      */
-    function getAll(
-        StringArray storage storageArray
-    ) internal view returns (string[] memory results) {
+    function getAll(StringArray storage storageArray) internal view returns (string[] memory results) {
         // edge case - unassigned dataPointer or empty array
         if (storageArray.dataPointer == address(0)) {
             return new string[](0);
@@ -260,10 +245,7 @@ library ImmutableStringArray {
                 assembly ("memory-safe") {
                     offsetsStart := add(allData, 40) // Skipping first 8 bytes (length)
                     start := shr(192, mload(add(offsetsStart, mul(index, 8)))) // Load offsets[index] as uint64
-                    end := shr(
-                        192,
-                        mload(add(offsetsStart, mul(add(index, 1), 8)))
-                    ) // Load offsets[index + 1]
+                    end := shr(192, mload(add(offsetsStart, mul(add(index, 1), 8)))) // Load offsets[index + 1]
                 }
             }
 

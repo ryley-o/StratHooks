@@ -8,6 +8,111 @@ import {IPMPV0} from "../src/interfaces/IPMPV0.sol";
 import {IPMPAugmentHook} from "../src/interfaces/IPMPAugmentHook.sol";
 import {IPMPConfigureHook} from "../src/interfaces/IPMPConfigureHook.sol";
 import {IGuardedEthTokenSwapper} from "../src/interfaces/IGuardedEthTokenSwapper.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+
+// Mock ERC20 for testing
+contract MockERC20 is IERC20 {
+    mapping(address => uint256) private _balances;
+    mapping(address => mapping(address => uint256)) private _allowances;
+
+    function transfer(address to, uint256 amount) external override returns (bool) {
+        _balances[msg.sender] -= amount;
+        _balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+        return true;
+    }
+
+    function approve(address spender, uint256 amount) external override returns (bool) {
+        _allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external override returns (bool) {
+        _allowances[from][msg.sender] -= amount;
+        _balances[from] -= amount;
+        _balances[to] += amount;
+        emit Transfer(from, to, amount);
+        return true;
+    }
+
+    function balanceOf(address account) external view override returns (uint256) {
+        return _balances[account];
+    }
+
+    function allowance(address owner, address spender) external view override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    function totalSupply() external pure override returns (uint256) {
+        return 0;
+    }
+
+    // Helper to mint tokens for testing
+    function mint(address to, uint256 amount) external {
+        _balances[to] += amount;
+    }
+}
+
+// Mock ERC721 for testing
+contract MockERC721 is IERC721 {
+    mapping(uint256 => address) private _owners;
+    mapping(address => uint256) private _balances;
+    mapping(uint256 => address) private _tokenApprovals;
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+    function ownerOf(uint256 tokenId) external view override returns (address) {
+        return _owners[tokenId];
+    }
+
+    function balanceOf(address owner) external view override returns (uint256) {
+        return _balances[owner];
+    }
+
+    function approve(address to, uint256 tokenId) external override {
+        _tokenApprovals[tokenId] = to;
+        emit Approval(msg.sender, to, tokenId);
+    }
+
+    function getApproved(uint256 tokenId) external view override returns (address) {
+        return _tokenApprovals[tokenId];
+    }
+
+    function setApprovalForAll(address operator, bool approved) external override {
+        _operatorApprovals[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function isApprovedForAll(address owner, address operator) external view override returns (bool) {
+        return _operatorApprovals[owner][operator];
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) external override {
+        _owners[tokenId] = to;
+        _balances[from]--;
+        _balances[to]++;
+        emit Transfer(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) external override {
+        this.transferFrom(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes calldata) external override {
+        this.transferFrom(from, to, tokenId);
+    }
+
+    function supportsInterface(bytes4) external pure override returns (bool) {
+        return true;
+    }
+
+    // Helper to mint tokens for testing
+    function mint(address to, uint256 tokenId) external {
+        _owners[tokenId] = to;
+        _balances[to]++;
+    }
+}
 
 // Mock GuardedEthTokenSwapper for testing
 contract MockGuardedEthTokenSwapper is IGuardedEthTokenSwapper {
@@ -72,20 +177,28 @@ contract MockGuardedEthTokenSwapper is IGuardedEthTokenSwapper {
 contract StratHooksTest is Test {
     StratHooks public hooks;
     MockGuardedEthTokenSwapper public mockSwapper;
+    MockERC721 public mockNFT;
+    MockERC20 public mockToken;
 
     address constant MOCK_CORE_CONTRACT = address(0x1);
-    uint256 constant MOCK_TOKEN_ID = 1;
+    uint256 constant PROJECT_ID = 1;
+    uint256 constant MOCK_TOKEN_ID = 1_000_000;
     address constant OWNER = address(0x100);
     address constant ADDITIONAL_PAYEE_RECEIVER = address(0x200);
     address constant KEEPER = address(0x300);
+    address constant PMPV0_CONTRACT_ADDRESS = 0x00000000A78E278b2d2e2935FaeBe19ee9F1FF14;
+    address constant TOKEN_OWNER = address(0x400);
+
     event UpkeepPerformed(uint256 indexed tokenId, uint256 indexed round, uint256 timestamp);
 
     function setUp() public {
-        // Deploy mock swapper
+        // Deploy mocks
         mockSwapper = new MockGuardedEthTokenSwapper();
+        mockNFT = new MockERC721();
+        mockToken = new MockERC20();
 
-        // Deploy hooks
-        hooks = new StratHooks(OWNER, ADDITIONAL_PAYEE_RECEIVER, KEEPER);
+        // Deploy hooks with new constructor params
+        hooks = new StratHooks(OWNER, ADDITIONAL_PAYEE_RECEIVER, KEEPER, address(mockNFT), PROJECT_ID);
 
         // Set the mock swapper
         vm.prank(OWNER);
@@ -98,18 +211,243 @@ contract StratHooksTest is Test {
         assertTrue(hooks.supportsInterface(type(IPMPConfigureHook).interfaceId));
     }
 
-    function test_OnTokenPMPConfigure() public view {
-        // Test basic configure hook functionality
+    // ============================================
+    // OnTokenPMPConfigure Withdrawal Tests
+    // ============================================
+
+    function _setupTokenForWithdrawal(uint256 tokenId) internal returns (address tokenAddress) {
+        // Setup: Create a token and complete all rounds
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Get token type and determine token address from the actual contract
+        (StratHooks.TokenType tokenType, uint256 tokenBalance,,,) = hooks.tokenMetadata(tokenId);
+
+        // Get the real token address the contract will use
+        tokenAddress = _getRealTokenAddress(tokenType);
+
+        // Deploy a mock ERC20 at that address using vm.etch
+        bytes memory mockERC20Code = type(MockERC20).runtimeCode;
+        vm.etch(tokenAddress, mockERC20Code);
+
+        // Mint tokens to the hooks contract
+        MockERC20(tokenAddress).mint(address(hooks), tokenBalance);
+
+        // Mint NFT to token owner
+        mockNFT.mint(TOKEN_OWNER, tokenId);
+
+        return tokenAddress;
+    }
+
+    function _getRealTokenAddress(StratHooks.TokenType tokenType) internal pure returns (address) {
+        // These are the real mainnet addresses from _getTokenAddressFromTokenType
+        if (tokenType == StratHooks.TokenType.ONEINCH) return 0x111111111117dC0aa78b770fA6A738034120C302;
+        if (tokenType == StratHooks.TokenType.AAVE) return 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+        if (tokenType == StratHooks.TokenType.APE) return 0x4d224452801ACEd8B2F0aebE155379bb5D594381;
+        if (tokenType == StratHooks.TokenType.BAT) return 0x0D8775F648430679A709E98d2b0Cb6250d2887EF;
+        if (tokenType == StratHooks.TokenType.COMP) return 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+        if (tokenType == StratHooks.TokenType.CRV) return 0xD533a949740bb3306d119CC777fa900bA034cd52;
+        if (tokenType == StratHooks.TokenType.USDT) return 0xdAC17F958D2ee523a2206206994597C13D831ec7;
+        if (tokenType == StratHooks.TokenType.LDO) return 0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32;
+        if (tokenType == StratHooks.TokenType.LINK) return 0x514910771AF9Ca656af840dff83E8264EcF986CA;
+        if (tokenType == StratHooks.TokenType.MKR) return 0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2;
+        if (tokenType == StratHooks.TokenType.SHIB) return 0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE;
+        if (tokenType == StratHooks.TokenType.UNI) return 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984;
+        if (tokenType == StratHooks.TokenType.WBTC) return 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
+        if (tokenType == StratHooks.TokenType.ZRX) return 0xE41d2489571d322189246DaFA5ebDe1F4699F498;
+        revert("Invalid token type");
+    }
+
+    function _getTokenAddress(StratHooks.TokenType tokenType) internal pure returns (address) {
+        // Redirect to real addresses
+        return _getRealTokenAddress(tokenType);
+    }
+
+    function test_OnTokenPMPConfigure_SuccessfulWithdrawal() public {
+        uint256 tokenId = MOCK_TOKEN_ID;
+        address tokenAddress = _setupTokenForWithdrawal(tokenId);
+
+        // Get initial balance
+        uint256 initialBalance = IERC20(tokenAddress).balanceOf(TOKEN_OWNER);
+
+        // Create withdrawal PMP input
         IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
-            key: "test-key",
-            configuredParamType: IPMPV0.ParamType.Uint256Range,
-            configuredValue: bytes32(uint256(42)),
+            key: "IsWithdrawn",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(1)), // true
             configuringArtistString: false,
             configuredValueString: ""
         });
 
-        // Should not revert with default implementation
-        hooks.onTokenPMPConfigure(MOCK_CORE_CONTRACT, MOCK_TOKEN_ID, input);
+        // Call from PMPV0 address
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        hooks.onTokenPMPConfigure(address(mockNFT), tokenId, input);
+
+        // Verify token was marked as withdrawn
+        (,,,, bool isWithdrawn) = hooks.tokenMetadata(tokenId);
+        assertTrue(isWithdrawn, "Token should be marked as withdrawn");
+
+        // Verify tokens were transferred to owner
+        uint256 finalBalance = IERC20(tokenAddress).balanceOf(TOKEN_OWNER);
+        assertGt(finalBalance, initialBalance, "Owner should have received tokens");
+    }
+
+    function test_OnTokenPMPConfigure_RevertsNonPMPV0Caller() public {
+        uint256 tokenId = MOCK_TOKEN_ID;
+        _setupTokenForWithdrawal(tokenId);
+
+        IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
+            key: "IsWithdrawn",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(1)),
+            configuringArtistString: false,
+            configuredValueString: ""
+        });
+
+        // Try to call from non-PMPV0 address
+        vm.prank(address(0x999));
+        vm.expectRevert("Only PMPV0 can call");
+        hooks.onTokenPMPConfigure(address(mockNFT), tokenId, input);
+    }
+
+    function test_OnTokenPMPConfigure_RevertsCoreContractMismatch() public {
+        uint256 tokenId = MOCK_TOKEN_ID;
+        _setupTokenForWithdrawal(tokenId);
+
+        IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
+            key: "IsWithdrawn",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(1)),
+            configuringArtistString: false,
+            configuredValueString: ""
+        });
+
+        // Call with wrong core contract
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        vm.expectRevert("Core contract mismatch");
+        hooks.onTokenPMPConfigure(address(0x999), tokenId, input);
+    }
+
+    function test_OnTokenPMPConfigure_RevertsProjectIdMismatch() public {
+        // Wrong project ID - token from project 2
+        uint256 wrongTokenId = 2_000_000;
+        _setupTokenForWithdrawal(wrongTokenId);
+
+        IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
+            key: "IsWithdrawn",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(1)),
+            configuringArtistString: false,
+            configuredValueString: ""
+        });
+
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        vm.expectRevert("Project id mismatch");
+        hooks.onTokenPMPConfigure(address(mockNFT), wrongTokenId, input);
+    }
+
+    function test_OnTokenPMPConfigure_RevertsInvalidKey() public {
+        uint256 tokenId = MOCK_TOKEN_ID;
+        _setupTokenForWithdrawal(tokenId);
+
+        // Wrong key
+        IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
+            key: "WrongKey",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(1)),
+            configuringArtistString: false,
+            configuredValueString: ""
+        });
+
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        vm.expectRevert("Invalid PMP input key");
+        hooks.onTokenPMPConfigure(address(mockNFT), tokenId, input);
+    }
+
+    function test_OnTokenPMPConfigure_RevertsAlreadyWithdrawn() public {
+        uint256 tokenId = MOCK_TOKEN_ID;
+        _setupTokenForWithdrawal(tokenId);
+
+        IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
+            key: "IsWithdrawn",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(1)),
+            configuringArtistString: false,
+            configuredValueString: ""
+        });
+
+        // First withdrawal
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        hooks.onTokenPMPConfigure(address(mockNFT), tokenId, input);
+
+        // Try to withdraw again
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        vm.expectRevert("Token already withdrawn");
+        hooks.onTokenPMPConfigure(address(mockNFT), tokenId, input);
+    }
+
+    function test_OnTokenPMPConfigure_RevertsInvalidValue() public {
+        uint256 tokenId = MOCK_TOKEN_ID;
+        _setupTokenForWithdrawal(tokenId);
+
+        // Try to set to false instead of true
+        IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
+            key: "IsWithdrawn",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(0)), // false
+            configuringArtistString: false,
+            configuredValueString: ""
+        });
+
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        vm.expectRevert("Invalid PMP input value");
+        hooks.onTokenPMPConfigure(address(mockNFT), tokenId, input);
+    }
+
+    function test_OnTokenPMPConfigure_TransfersCorrectAmount() public {
+        uint256 tokenId = MOCK_TOKEN_ID;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        // Set a specific swap amount
+        uint256 expectedAmount = 12345e18;
+        mockSwapper.setMockSwapReturn(expectedAmount);
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Get token type and deploy mock at real address
+        (StratHooks.TokenType tokenType, uint256 tokenBalance,,,) = hooks.tokenMetadata(tokenId);
+        address tokenAddress = _getRealTokenAddress(tokenType);
+
+        // Deploy mock ERC20 at that address
+        bytes memory mockERC20Code = type(MockERC20).runtimeCode;
+        vm.etch(tokenAddress, mockERC20Code);
+        MockERC20(tokenAddress).mint(address(hooks), tokenBalance);
+
+        // Mint NFT to owner
+        mockNFT.mint(TOKEN_OWNER, tokenId);
+
+        // Perform withdrawal
+        IPMPV0.PMPInput memory input = IPMPV0.PMPInput({
+            key: "IsWithdrawn",
+            configuredParamType: IPMPV0.ParamType.Bool,
+            configuredValue: bytes32(uint256(1)),
+            configuringArtistString: false,
+            configuredValueString: ""
+        });
+
+        uint256 initialBalance = IERC20(tokenAddress).balanceOf(TOKEN_OWNER);
+
+        vm.prank(PMPV0_CONTRACT_ADDRESS);
+        hooks.onTokenPMPConfigure(address(mockNFT), tokenId, input);
+
+        // Verify correct amount transferred
+        uint256 finalBalance = IERC20(tokenAddress).balanceOf(TOKEN_OWNER);
+        assertEq(finalBalance - initialBalance, expectedAmount, "Should transfer exact token balance");
     }
 
     function test_OnTokenPMPReadAugmentation() public view {
@@ -155,7 +493,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
         // Get the interval length
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
 
         // Advance time past the first interval
         vm.warp(createdAt + intervalLengthSeconds + 1);
@@ -185,7 +523,7 @@ contract StratHooksTest is Test {
         }
 
         // Advance time to make all tokens ready
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(baseTokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(baseTokenId);
         vm.warp(createdAt + intervalLengthSeconds + 1);
 
         // Check upkeep - should return the first token
@@ -206,7 +544,7 @@ contract StratHooksTest is Test {
         vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
 
         // Perform all 12 rounds (starting from round 1 since round 0 was created)
         for (uint256 i = 1; i < 12; i++) {
@@ -239,7 +577,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
         // Advance time
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         vm.warp(createdAt + intervalLengthSeconds + 1);
 
         // Perform upkeep
@@ -262,7 +600,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
         // Advance time
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         vm.warp(createdAt + intervalLengthSeconds + 1);
 
         uint256 round = 1;
@@ -287,7 +625,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
         // Advance time
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         vm.warp(createdAt + intervalLengthSeconds + 1);
 
         // Perform upkeep for round 1
@@ -335,8 +673,8 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId2, keccak256(abi.encode(tokenId2)));
 
         // Advance time - get the max interval to ensure both are ready
-        (,, uint128 createdAt1, uint32 intervalLengthSeconds1) = hooks.tokenMetadata(tokenId1);
-        (,, uint128 createdAt2, uint32 intervalLengthSeconds2) = hooks.tokenMetadata(tokenId2);
+        (,, uint128 createdAt1, uint32 intervalLengthSeconds1,) = hooks.tokenMetadata(tokenId1);
+        (,, uint128 createdAt2, uint32 intervalLengthSeconds2,) = hooks.tokenMetadata(tokenId2);
         uint256 maxInterval =
             intervalLengthSeconds1 > intervalLengthSeconds2 ? intervalLengthSeconds1 : intervalLengthSeconds2;
         uint256 maxCreatedAt = createdAt1 > createdAt2 ? createdAt1 : createdAt2;
@@ -365,7 +703,7 @@ contract StratHooksTest is Test {
         vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
 
         // Execute multiple rounds sequentially
         for (uint256 i = 1; i < 12; i++) {
@@ -400,7 +738,7 @@ contract StratHooksTest is Test {
         mockSwapper.setMockPrice(0.008e18, 18);
 
         // Advance time
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         vm.warp(createdAt + intervalLengthSeconds + 1);
 
         // Perform upkeep - should use the NEW oracle price (0.008e18)
@@ -434,7 +772,7 @@ contract StratHooksTest is Test {
         }
 
         // Advance time to make only the first token ready (smallest interval)
-        (,, uint128 createdAt0, uint32 intervalLength0) = hooks.tokenMetadata(baseTokenId);
+        (,, uint128 createdAt0, uint32 intervalLength0,) = hooks.tokenMetadata(baseTokenId);
         vm.warp(createdAt0 + intervalLength0 + 1);
 
         // checkUpkeep should find at least one token ready
@@ -456,7 +794,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
         // Advance time past multiple intervals
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         vm.warp(createdAt + intervalLengthSeconds * 5);
 
         // Try to perform upkeep for round 3 (should fail - current round is 1)
@@ -484,7 +822,7 @@ contract StratHooksTest is Test {
         }
 
         // Advance time
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(baseTokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(baseTokenId);
         vm.warp(createdAt + intervalLengthSeconds * 13); // Way past all intervals
 
         // Complete all rounds for first token
@@ -512,7 +850,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
         // Advance time
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         uint256 warpTime = createdAt + intervalLengthSeconds + 100;
         vm.warp(warpTime);
 
@@ -541,7 +879,7 @@ contract StratHooksTest is Test {
         assertFalse(upkeepNeeded1, "Should not need upkeep before interval");
 
         // After interval: should return true
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         vm.warp(createdAt + intervalLengthSeconds + 1);
 
         (bool upkeepNeeded2, bytes memory performData) = hooks.checkUpkeep("");
@@ -562,7 +900,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
         // Advance time
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
         vm.warp(createdAt + intervalLengthSeconds + 1);
 
         // Measure gas
@@ -584,7 +922,7 @@ contract StratHooksTest is Test {
         vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
-        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        (,, uint128 createdAt, uint32 intervalLengthSeconds,) = hooks.tokenMetadata(tokenId);
 
         // Perform rounds 1-3
         for (uint256 i = 1; i <= 3; i++) {
@@ -688,7 +1026,7 @@ contract StratHooksTest is Test {
         assertEq(hooks.latestReceivedTokenId(), tokenId, "Latest token ID should be updated");
 
         // Verify token metadata was initialized
-        (StratHooks.TokenType tokenType, uint256 tokenBalance, uint128 createdAt, uint32 intervalLengthSeconds) =
+        (StratHooks.TokenType tokenType, uint256 tokenBalance, uint128 createdAt, uint32 intervalLengthSeconds,) =
             hooks.tokenMetadata(tokenId);
 
         assertEq(tokenBalance, 5000e18, "Token balance should match swap return");
@@ -752,7 +1090,7 @@ contract StratHooksTest is Test {
         hooks.receiveFunds{value: amount}(tokenId, tokenHash);
 
         // Verify the token balance matches the mock return value
-        (, uint256 tokenBalance,,) = hooks.tokenMetadata(tokenId);
+        (, uint256 tokenBalance,,,) = hooks.tokenMetadata(tokenId);
         assertEq(tokenBalance, 10000e18, "Token balance should match mock swap return");
     }
 
@@ -767,7 +1105,7 @@ contract StratHooksTest is Test {
             vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
             hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
 
-            (StratHooks.TokenType tokenType,,,) = hooks.tokenMetadata(tokenId);
+            (StratHooks.TokenType tokenType,,,,) = hooks.tokenMetadata(tokenId);
 
             // Verify token type is in valid range
             assertTrue(uint256(tokenType) < 14, "Token type should be valid");
@@ -787,7 +1125,7 @@ contract StratHooksTest is Test {
 
         // The price history should have been populated (we can't easily read the array directly in this test)
         // But we can verify the metadata exists
-        (, uint256 tokenBalance,,) = hooks.tokenMetadata(tokenId);
+        (, uint256 tokenBalance,,,) = hooks.tokenMetadata(tokenId);
         assertGt(tokenBalance, 0, "Token balance should be set");
     }
 }

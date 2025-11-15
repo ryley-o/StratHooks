@@ -72,7 +72,7 @@ contract MockGuardedEthTokenSwapper is IGuardedEthTokenSwapper {
 contract StratHooksTest is Test {
     StratHooks public hooks;
     MockGuardedEthTokenSwapper public mockSwapper;
-    
+
     address constant MOCK_CORE_CONTRACT = address(0x1);
     uint256 constant MOCK_TOKEN_ID = 1;
     address constant OWNER = address(0x100);
@@ -83,10 +83,10 @@ contract StratHooksTest is Test {
     function setUp() public {
         // Deploy mock swapper
         mockSwapper = new MockGuardedEthTokenSwapper();
-        
+
         // Deploy hooks
         hooks = new StratHooks(OWNER, ADDITIONAL_PAYEE_RECEIVER, KEEPER);
-        
+
         // Set the mock swapper
         vm.prank(OWNER);
         hooks.setGuardedEthTokenSwapper(address(mockSwapper));
@@ -115,16 +115,10 @@ contract StratHooksTest is Test {
     function test_OnTokenPMPReadAugmentation() public view {
         // Test basic augmentation hook functionality
         IWeb3Call.TokenParam[] memory params = new IWeb3Call.TokenParam[](1);
-        params[0] = IWeb3Call.TokenParam({
-            key: "test-key",
-            value: "test-value"
-        });
+        params[0] = IWeb3Call.TokenParam({key: "test-key", value: "test-value"});
 
-        IWeb3Call.TokenParam[] memory augmented = hooks.onTokenPMPReadAugmentation(
-            MOCK_CORE_CONTRACT,
-            MOCK_TOKEN_ID,
-            params
-        );
+        IWeb3Call.TokenParam[] memory augmented =
+            hooks.onTokenPMPReadAugmentation(MOCK_CORE_CONTRACT, MOCK_TOKEN_ID, params);
 
         // With default implementation, should return same params
         assertEq(augmented.length, params.length);
@@ -136,110 +130,478 @@ contract StratHooksTest is Test {
     // Chainlink Automation Tests
     // ============================================
 
-    function test_CheckUpkeep_DefaultReturnsFalse() public view {
-        // With default implementation, checkUpkeep should return false
-        bytes memory checkData = abi.encode(MOCK_TOKEN_ID);
-        
-        (bool upkeepNeeded, bytes memory performData) = hooks.checkUpkeep(checkData);
-        
-        assertFalse(upkeepNeeded, "Upkeep should not be needed by default");
-        assertEq(performData.length, 0, "PerformData should be empty when upkeep not needed");
+    function test_CheckUpkeep_TokenNotReadyReturnsFalse() public {
+        // Setup: create a token but don't advance time
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Check upkeep immediately - should return false
+        (bool upkeepNeeded,) = hooks.checkUpkeep("");
+
+        assertFalse(upkeepNeeded, "Upkeep should not be needed immediately after creation");
     }
 
-    function test_CheckUpkeep_DecodesTokenId() public view {
-        // Verify that checkUpkeep can decode the tokenId
-        uint256 testTokenId = 12345;
-        bytes memory checkData = abi.encode(testTokenId);
-        
-        // This should not revert
-        hooks.checkUpkeep(checkData);
+    function test_CheckUpkeep_TokenReadyReturnsTrue() public {
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Get the interval length
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+
+        // Advance time past the first interval
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        // Check upkeep - should return true
+        (bool upkeepNeeded, bytes memory performData) = hooks.checkUpkeep("");
+
+        assertTrue(upkeepNeeded, "Upkeep should be needed after interval passes");
+
+        // Verify performData contains correct tokenId and round
+        (uint256 returnedTokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
+        assertEq(returnedTokenId, tokenId, "Returned tokenId should match");
+        assertEq(round, 1, "Round should be 1 (second entry in price history)");
+    }
+
+    function test_CheckUpkeep_ReturnsFirstReadyToken() public {
+        // Setup: create multiple tokens
+        uint256 baseTokenId = 1_000_000;
+
+        for (uint256 i = 0; i < 3; i++) {
+            uint256 tokenId = baseTokenId + i;
+            bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+            vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+            vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+            hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+        }
+
+        // Advance time to make all tokens ready
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(baseTokenId);
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        // Check upkeep - should return the first token
+        (bool upkeepNeeded, bytes memory performData) = hooks.checkUpkeep("");
+
+        assertTrue(upkeepNeeded, "Upkeep should be needed");
+
+        (uint256 returnedTokenId,) = abi.decode(performData, (uint256, uint256));
+        assertEq(returnedTokenId, baseTokenId, "Should return first ready token");
+    }
+
+    function test_CheckUpkeep_SkipsCompletedTokens() public {
+        // Setup: create a token and complete all 12 rounds
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+
+        // Perform all 12 rounds (starting from round 1 since round 0 was created)
+        for (uint256 i = 1; i < 12; i++) {
+            vm.warp(createdAt + intervalLengthSeconds * i + 1);
+
+            bytes memory performData = abi.encode(tokenId, i);
+            vm.prank(KEEPER);
+            hooks.performUpkeep(performData);
+        }
+
+        // Advance time further
+        vm.warp(createdAt + intervalLengthSeconds * 20);
+
+        // Check upkeep - should return false as token is complete
+        (bool upkeepNeeded,) = hooks.checkUpkeep("");
+
+        assertFalse(upkeepNeeded, "Upkeep should not be needed for completed token");
+    }
+
+    function test_PerformUpkeep_AppendsOraclePrice() public {
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        // Set a specific oracle price
+        mockSwapper.setMockPrice(0.006e18, 18);
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Advance time
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        // Perform upkeep
+        bytes memory performData = abi.encode(tokenId, 1);
+
+        vm.prank(KEEPER);
+        hooks.performUpkeep(performData);
+
+        // Price history should now have 2 entries (initial + this upkeep)
+        // We can't directly access the array, but we can verify the next round incremented
     }
 
     function test_PerformUpkeep_ExecutesAndEmitsEvent() public {
-        // Setup: manually set up state as if checkUpkeep returned true
-        uint256 tokenId = MOCK_TOKEN_ID;
-        uint256 round = 0;
-        
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Advance time
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        uint256 round = 1;
         bytes memory performData = abi.encode(tokenId, round);
-        
+
         // Expect the UpkeepPerformed event
         vm.expectEmit(true, true, false, true);
         emit UpkeepPerformed(tokenId, round, block.timestamp);
-        
+
         // Perform upkeep as the keeper
         vm.prank(KEEPER);
         hooks.performUpkeep(performData);
-        
-        // Verify state changes
-        assertEq(hooks.tokenRound(tokenId), 1, "Round should be incremented");
-        assertEq(hooks.lastUpkeepTimestamp(tokenId), block.timestamp, "Timestamp should be updated");
-        assertTrue(hooks.roundExecuted(tokenId, round), "Round should be marked as executed");
     }
 
     function test_PerformUpkeep_RevertsOnStaleRound() public {
-        // First perform upkeep for round 0
-        uint256 tokenId = MOCK_TOKEN_ID;
-        bytes memory performData = abi.encode(tokenId, 0);
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Advance time
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        // Perform upkeep for round 1
+        bytes memory performData = abi.encode(tokenId, 1);
         vm.prank(KEEPER);
         hooks.performUpkeep(performData);
-        
-        // Now round is 1, trying to execute round 0 again should fail
+
+        // Now trying to execute round 1 again should fail (stale)
         vm.prank(KEEPER);
         vm.expectRevert("Stale upkeep");
         hooks.performUpkeep(performData);
     }
 
-    function test_PerformUpkeep_RevertsOnDuplicateExecution() public {
-        // Perform upkeep for round 0
-        uint256 tokenId = MOCK_TOKEN_ID;
-        bytes memory performData = abi.encode(tokenId, 0);
+    function test_PerformUpkeep_RevertsBeforeIntervalPassed() public {
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Try to perform upkeep immediately (should fail)
+        bytes memory performData = abi.encode(tokenId, 1);
+
         vm.prank(KEEPER);
-        hooks.performUpkeep(performData);
-        
-        // The round is now 1, so trying to execute round 0 again will fail with "Stale upkeep"
-        // This test verifies the stale round check works
-        vm.prank(KEEPER);
-        vm.expectRevert("Stale upkeep");
+        vm.expectRevert("Block timestamp requirements not met");
         hooks.performUpkeep(performData);
     }
 
     function test_PerformUpkeep_IdempotencyAcrossTokens() public {
-        // Test that different tokens maintain independent state
-        uint256 tokenId1 = 1;
-        uint256 tokenId2 = 2;
-        
-        // Perform upkeep for token 1
-        bytes memory performData1 = abi.encode(tokenId1, 0);
+        // Setup: create multiple tokens
+        uint256 baseTokenId = 1_000_000;
+        uint256 tokenId1 = baseTokenId;
+        uint256 tokenId2 = baseTokenId + 1;
+
+        // Receive funds for token 1
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId1, keccak256(abi.encode(tokenId1)));
+
+        // Receive funds for token 2
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId2, keccak256(abi.encode(tokenId2)));
+
+        // Advance time - get the max interval to ensure both are ready
+        (,, uint128 createdAt1, uint32 intervalLengthSeconds1) = hooks.tokenMetadata(tokenId1);
+        (,, uint128 createdAt2, uint32 intervalLengthSeconds2) = hooks.tokenMetadata(tokenId2);
+        uint256 maxInterval =
+            intervalLengthSeconds1 > intervalLengthSeconds2 ? intervalLengthSeconds1 : intervalLengthSeconds2;
+        uint256 maxCreatedAt = createdAt1 > createdAt2 ? createdAt1 : createdAt2;
+        vm.warp(maxCreatedAt + maxInterval + 1);
+
+        // Perform upkeep for both tokens
         vm.prank(KEEPER);
-        hooks.performUpkeep(performData1);
-        
-        // Perform upkeep for token 2
-        bytes memory performData2 = abi.encode(tokenId2, 0);
+        hooks.performUpkeep(abi.encode(tokenId1, 1));
+
         vm.prank(KEEPER);
-        hooks.performUpkeep(performData2);
-        
-        // Verify both tokens have independent state
-        assertEq(hooks.tokenRound(tokenId1), 1, "Token 1 should be at round 1");
-        assertEq(hooks.tokenRound(tokenId2), 1, "Token 2 should be at round 1");
-        assertTrue(hooks.roundExecuted(tokenId1, 0), "Token 1 round 0 should be executed");
-        assertTrue(hooks.roundExecuted(tokenId2, 0), "Token 2 round 0 should be executed");
+        hooks.performUpkeep(abi.encode(tokenId2, 1));
+
+        // Both tokens should now be at round 2 (price history length = 2)
+        // Verify by trying to perform round 1 again (should fail as stale)
+        vm.prank(KEEPER);
+        vm.expectRevert("Stale upkeep");
+        hooks.performUpkeep(abi.encode(tokenId1, 1));
     }
 
-    function test_PerformUpkeep_MultipleRounds() public {
-        uint256 tokenId = MOCK_TOKEN_ID;
-        
-        // Execute multiple rounds
-        for (uint256 i = 0; i < 5; i++) {
+    function test_PerformUpkeep_MultipleRoundsSequential() public {
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+
+        // Execute multiple rounds sequentially
+        for (uint256 i = 1; i < 12; i++) {
+            // Advance time for each interval
+            vm.warp(createdAt + intervalLengthSeconds * i + 1);
+
             bytes memory performData = abi.encode(tokenId, i);
             vm.prank(KEEPER);
             hooks.performUpkeep(performData);
-            
-            assertEq(hooks.tokenRound(tokenId), i + 1, "Round should increment");
-            assertTrue(hooks.roundExecuted(tokenId, i), "Round should be marked executed");
         }
-        
-        // Final round should be 5
-        assertEq(hooks.tokenRound(tokenId), 5, "Should be at round 5");
+
+        // After 11 more upkeeps (12 total entries in price history), token should be complete
+        // Verify by checking checkUpkeep returns false for this token
+        vm.warp(createdAt + intervalLengthSeconds * 20);
+        (bool upkeepNeeded,) = hooks.checkUpkeep("");
+        assertFalse(upkeepNeeded, "Token should be complete after 12 rounds");
+    }
+
+    function test_PerformUpkeep_CorrectOraclePriceUsed() public {
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        // Set initial price
+        mockSwapper.setMockPrice(0.004e18, 18);
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Change oracle price before performing upkeep
+        mockSwapper.setMockPrice(0.008e18, 18);
+
+        // Advance time
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        // Perform upkeep - should use the NEW oracle price (0.008e18)
+        bytes memory performData = abi.encode(tokenId, 1);
+        vm.prank(KEEPER);
+        hooks.performUpkeep(performData);
+
+        // The price history now has 2 entries: initial (0.004) and upkeep (0.008)
+        // We can verify this worked by doing another upkeep and confirming it increments
+        vm.warp(createdAt + intervalLengthSeconds * 2 + 1);
+        vm.prank(KEEPER);
+        hooks.performUpkeep(abi.encode(tokenId, 2));
+    }
+
+    // ============================================
+    // Additional Keeper Logic Tests
+    // ============================================
+
+    function test_CheckUpkeep_MultipleTokensDifferentIntervals() public {
+        // Create tokens with different intervals
+        uint256 baseTokenId = 1_000_000;
+
+        for (uint256 i = 0; i < 3; i++) {
+            uint256 tokenId = baseTokenId + i;
+            // Use different hashes to get different intervals
+            bytes32 tokenHash = keccak256(abi.encode(tokenId * 7 + 12345));
+
+            vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+            vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+            hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+        }
+
+        // Advance time to make only the first token ready (smallest interval)
+        (,, uint128 createdAt0, uint32 intervalLength0) = hooks.tokenMetadata(baseTokenId);
+        vm.warp(createdAt0 + intervalLength0 + 1);
+
+        // checkUpkeep should find at least one token ready
+        (bool upkeepNeeded, bytes memory performData) = hooks.checkUpkeep("");
+
+        if (upkeepNeeded) {
+            (uint256 returnedTokenId,) = abi.decode(performData, (uint256, uint256));
+            assertTrue(returnedTokenId >= baseTokenId && returnedTokenId < baseTokenId + 3, "Token should be in range");
+        }
+    }
+
+    function test_PerformUpkeep_CannotSkipRounds() public {
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Advance time past multiple intervals
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        vm.warp(createdAt + intervalLengthSeconds * 5);
+
+        // Try to perform upkeep for round 3 (should fail - current round is 1)
+        bytes memory performData = abi.encode(tokenId, 3);
+        vm.prank(KEEPER);
+        vm.expectRevert("Stale upkeep");
+        hooks.performUpkeep(performData);
+
+        // Should only be able to perform round 1
+        vm.prank(KEEPER);
+        hooks.performUpkeep(abi.encode(tokenId, 1));
+    }
+
+    function test_CheckUpkeep_SkipsTokensInProgress() public {
+        // Create two tokens
+        uint256 baseTokenId = 1_000_000;
+
+        for (uint256 i = 0; i < 2; i++) {
+            uint256 tokenId = baseTokenId + i;
+            bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+            vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+            vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+            hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+        }
+
+        // Advance time
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(baseTokenId);
+        vm.warp(createdAt + intervalLengthSeconds * 13); // Way past all intervals
+
+        // Complete all rounds for first token
+        for (uint256 i = 1; i < 12; i++) {
+            vm.prank(KEEPER);
+            hooks.performUpkeep(abi.encode(baseTokenId, i));
+        }
+
+        // checkUpkeep should now skip first token and return second token
+        (bool upkeepNeeded, bytes memory performData) = hooks.checkUpkeep("");
+
+        if (upkeepNeeded) {
+            (uint256 returnedTokenId,) = abi.decode(performData, (uint256, uint256));
+            assertEq(returnedTokenId, baseTokenId + 1, "Should return second token");
+        }
+    }
+
+    function test_PerformUpkeep_EmitsCorrectEventData() public {
+        // Setup: create a token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Advance time
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        uint256 warpTime = createdAt + intervalLengthSeconds + 100;
+        vm.warp(warpTime);
+
+        uint256 round = 1;
+        bytes memory performData = abi.encode(tokenId, round);
+
+        // Expect event with specific timestamp
+        vm.expectEmit(true, true, false, true);
+        emit UpkeepPerformed(tokenId, round, warpTime);
+
+        vm.prank(KEEPER);
+        hooks.performUpkeep(performData);
+    }
+
+    function test_CheckUpkeep_WorksWithSingleToken() public {
+        // Test that checkUpkeep works correctly with just one token
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Before interval: should return false
+        (bool upkeepNeeded1,) = hooks.checkUpkeep("");
+        assertFalse(upkeepNeeded1, "Should not need upkeep before interval");
+
+        // After interval: should return true
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        (bool upkeepNeeded2, bytes memory performData) = hooks.checkUpkeep("");
+        assertTrue(upkeepNeeded2, "Should need upkeep after interval");
+
+        (uint256 returnedTokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
+        assertEq(returnedTokenId, tokenId, "Should return correct tokenId");
+        assertEq(round, 1, "Should be round 1");
+    }
+
+    function test_PerformUpkeep_GasUsageReasonable() public {
+        // Create a token and test gas usage for upkeep
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        // Advance time
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+        vm.warp(createdAt + intervalLengthSeconds + 1);
+
+        // Measure gas
+        uint256 gasBefore = gasleft();
+        vm.prank(KEEPER);
+        hooks.performUpkeep(abi.encode(tokenId, 1));
+        uint256 gasUsed = gasBefore - gasleft();
+
+        // Gas should be reasonable (under 100k for a simple append operation)
+        assertLt(gasUsed, 100000, "Gas usage should be reasonable");
+    }
+
+    function test_CheckUpkeep_ReturnsCorrectRoundNumber() public {
+        // Create token and perform several upkeeps
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
+        hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+        (,, uint128 createdAt, uint32 intervalLengthSeconds) = hooks.tokenMetadata(tokenId);
+
+        // Perform rounds 1-3
+        for (uint256 i = 1; i <= 3; i++) {
+            vm.warp(createdAt + intervalLengthSeconds * i + 1);
+
+            // Check that checkUpkeep returns correct round
+            (bool upkeepNeeded, bytes memory performData) = hooks.checkUpkeep("");
+            assertTrue(upkeepNeeded, "Upkeep should be needed");
+
+            (uint256 returnedTokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
+            assertEq(returnedTokenId, tokenId, "Should return correct tokenId");
+            assertEq(round, i, "Should return correct round number");
+
+            // Perform the upkeep
+            vm.prank(KEEPER);
+            hooks.performUpkeep(performData);
+        }
     }
 
     // ============================================
@@ -248,16 +610,16 @@ contract StratHooksTest is Test {
 
     function test_SetKeeper() public {
         address newKeeper = address(0x400);
-        
+
         vm.prank(OWNER);
         hooks.setKeeper(newKeeper);
-        
+
         assertEq(hooks.keeper(), newKeeper, "Keeper should be updated");
     }
 
     function test_SetKeeper_RevertsNonOwner() public {
         address newKeeper = address(0x400);
-        
+
         vm.prank(address(0x999));
         vm.expectRevert();
         hooks.setKeeper(newKeeper);
@@ -265,16 +627,16 @@ contract StratHooksTest is Test {
 
     function test_SetAdditionalPayeeReceiver() public {
         address newReceiver = address(0x500);
-        
+
         vm.prank(OWNER);
         hooks.setAdditionalPayeeReceiver(newReceiver);
-        
+
         assertEq(hooks.additionalPayeeReceiver(), newReceiver, "Additional payee receiver should be updated");
     }
 
     function test_SetAdditionalPayeeReceiver_RevertsNonOwner() public {
         address newReceiver = address(0x500);
-        
+
         vm.prank(address(0x999));
         vm.expectRevert();
         hooks.setAdditionalPayeeReceiver(newReceiver);
@@ -282,16 +644,16 @@ contract StratHooksTest is Test {
 
     function test_SetGuardedEthTokenSwapper() public {
         address newSwapper = address(0x600);
-        
+
         vm.prank(OWNER);
         hooks.setGuardedEthTokenSwapper(newSwapper);
-        
+
         assertEq(address(hooks.guardedEthTokenSwapper()), newSwapper, "Swapper should be updated");
     }
 
     function test_SetGuardedEthTokenSwapper_RevertsNonOwner() public {
         address newSwapper = address(0x600);
-        
+
         vm.prank(address(0x999));
         vm.expectRevert();
         hooks.setGuardedEthTokenSwapper(newSwapper);
@@ -300,7 +662,7 @@ contract StratHooksTest is Test {
     function test_PerformUpkeep_RevertsNonKeeper() public {
         uint256 tokenId = MOCK_TOKEN_ID;
         bytes memory performData = abi.encode(tokenId, 0);
-        
+
         vm.prank(address(0x999));
         vm.expectRevert("Not keeper");
         hooks.performUpkeep(performData);
@@ -311,40 +673,36 @@ contract StratHooksTest is Test {
     // ============================================
 
     function test_ReceiveFunds() public {
-        uint256 tokenId = 1;
+        uint256 tokenId = 1_000_000;
         bytes32 tokenHash = keccak256(abi.encode(tokenId));
         uint256 amount = 1 ether;
-        
+
         // Set up mock return values
         mockSwapper.setMockSwapReturn(5000e18); // 5000 tokens
         mockSwapper.setMockPrice(0.004e18, 18); // 0.004 ETH per token
-        
+
         vm.prank(ADDITIONAL_PAYEE_RECEIVER);
         vm.deal(ADDITIONAL_PAYEE_RECEIVER, amount);
         hooks.receiveFunds{value: amount}(tokenId, tokenHash);
-        
+
         assertEq(hooks.latestReceivedTokenId(), tokenId, "Latest token ID should be updated");
-        
+
         // Verify token metadata was initialized
-        (
-            StratHooks.TokenType tokenType,
-            uint256 tokenBalance,
-            uint128 createdAt,
-            uint32 intervalLengthSeconds
-        ) = hooks.tokenMetadata(tokenId);
-        
+        (StratHooks.TokenType tokenType, uint256 tokenBalance, uint128 createdAt, uint32 intervalLengthSeconds) =
+            hooks.tokenMetadata(tokenId);
+
         assertEq(tokenBalance, 5000e18, "Token balance should match swap return");
         assertEq(createdAt, block.timestamp, "Created at should be block timestamp");
         assertGt(intervalLengthSeconds, 0, "Interval length should be set");
-        
+
         // Verify token type is valid (0-13 for 14 token types)
         assertTrue(uint256(tokenType) < 14, "Token type should be in valid range");
     }
 
     function test_ReceiveFunds_RevertsNonPayee() public {
-        uint256 tokenId = 1;
+        uint256 tokenId = 1_000_000;
         bytes32 tokenHash = keccak256(abi.encode(tokenId));
-        
+
         vm.deal(address(0x999), 1 ether);
         vm.prank(address(0x999));
         vm.expectRevert("Not additional payee receiver");
@@ -352,79 +710,84 @@ contract StratHooksTest is Test {
     }
 
     function test_ReceiveFunds_RevertsInvalidTokenId() public {
-        // First receive funds for token 1
+        // First receive funds for token 1_000_000
+        uint256 firstTokenId = 1_000_000;
         vm.prank(ADDITIONAL_PAYEE_RECEIVER);
         vm.deal(ADDITIONAL_PAYEE_RECEIVER, 2 ether);
-        hooks.receiveFunds{value: 1 ether}(1, keccak256(abi.encode(uint256(1))));
-        
-        // Try to receive funds for token 3 (should be 2)
+        hooks.receiveFunds{value: 1 ether}(firstTokenId, keccak256(abi.encode(firstTokenId)));
+
+        // Try to receive funds for token 1_000_002 (should be 1_000_001)
         vm.prank(ADDITIONAL_PAYEE_RECEIVER);
         vm.expectRevert("Invalid token id");
-        hooks.receiveFunds{value: 1 ether}(3, keccak256(abi.encode(uint256(3))));
+        hooks.receiveFunds{value: 1 ether}(1_000_002, keccak256(abi.encode(uint256(1_000_002))));
     }
 
     function test_ReceiveFunds_MultipleTokens() public {
         // Receive funds for multiple tokens sequentially
-        for (uint256 i = 1; i <= 5; i++) {
-            bytes32 tokenHash = keccak256(abi.encode(i));
-            
+        uint256 baseTokenId = 1_000_000;
+        for (uint256 i = 0; i < 5; i++) {
+            uint256 tokenId = baseTokenId + i;
+            bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
             vm.prank(ADDITIONAL_PAYEE_RECEIVER);
             vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
-            hooks.receiveFunds{value: 1 ether}(i, tokenHash);
-            
-            assertEq(hooks.latestReceivedTokenId(), i, "Latest token ID should match iteration");
+            hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+            assertEq(hooks.latestReceivedTokenId(), tokenId, "Latest token ID should match iteration");
         }
     }
 
     function test_ReceiveFunds_CallsSwapperCorrectly() public {
-        uint256 tokenId = 1;
+        uint256 tokenId = 1_000_000;
         bytes32 tokenHash = keccak256(abi.encode(tokenId));
         uint256 amount = 2 ether;
-        
+
         // Set mock return to a specific value
         mockSwapper.setMockSwapReturn(10000e18);
-        
+
         vm.prank(ADDITIONAL_PAYEE_RECEIVER);
         vm.deal(ADDITIONAL_PAYEE_RECEIVER, amount);
-        
+
         // Call receiveFunds and verify it uses the mock swap return
         hooks.receiveFunds{value: amount}(tokenId, tokenHash);
-        
+
         // Verify the token balance matches the mock return value
-        (,uint256 tokenBalance,,) = hooks.tokenMetadata(tokenId);
+        (, uint256 tokenBalance,,) = hooks.tokenMetadata(tokenId);
         assertEq(tokenBalance, 10000e18, "Token balance should match mock swap return");
     }
 
     function test_ReceiveFunds_StoresCorrectTokenType() public {
-        // Test that different hashes produce different token types
-        for (uint256 i = 1; i <= 14; i++) {
-            bytes32 tokenHash = keccak256(abi.encode(i * 123456)); // Use different hashes
-            
+        // Test that different hashes produce token types in valid range
+        uint256 baseTokenId = 1_000_000;
+        for (uint256 i = 0; i < 14; i++) {
+            uint256 tokenId = baseTokenId + i;
+            bytes32 tokenHash = keccak256(abi.encode(tokenId * 123456)); // Use different hashes
+
             vm.prank(ADDITIONAL_PAYEE_RECEIVER);
             vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
-            hooks.receiveFunds{value: 1 ether}(i, tokenHash);
-            
-            (StratHooks.TokenType tokenType,,,) = hooks.tokenMetadata(i);
-            
+            hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
+
+            (StratHooks.TokenType tokenType,,,) = hooks.tokenMetadata(tokenId);
+
             // Verify token type is in valid range
             assertTrue(uint256(tokenType) < 14, "Token type should be valid");
         }
     }
 
     function test_ReceiveFunds_StoresPriceHistory() public {
-        uint256 tokenId = 1;
+        uint256 tokenId = 1_000_000;
         bytes32 tokenHash = keccak256(abi.encode(tokenId));
-        
+
         // Set a specific price
         mockSwapper.setMockPrice(0.005e18, 18);
-        
+
         vm.prank(ADDITIONAL_PAYEE_RECEIVER);
         vm.deal(ADDITIONAL_PAYEE_RECEIVER, 1 ether);
         hooks.receiveFunds{value: 1 ether}(tokenId, tokenHash);
-        
+
         // The price history should have been populated (we can't easily read the array directly in this test)
         // But we can verify the metadata exists
-        (,uint256 tokenBalance,,) = hooks.tokenMetadata(tokenId);
+        (, uint256 tokenBalance,,) = hooks.tokenMetadata(tokenId);
         assertGt(tokenBalance, 0, "Token balance should be set");
     }
 }

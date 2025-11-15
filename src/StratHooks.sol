@@ -22,14 +22,14 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * It supports both augment and configure hooks to enable custom parameter handling.
  * Configure hooks run during configuration to validate settings.
  * Augment hooks run during reads to inject or modify parameters.
- * 
+ *
  * Implements Chainlink Automation for automated upkeep of token states.
  */
 contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, AutomationCompatibleInterface, Ownable {
     // ============================================
     // Events
     // ============================================
-    
+
     /**
      * @notice Emitted when upkeep is performed for a token
      * @param tokenId The token ID that was updated
@@ -37,7 +37,7 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
      * @param timestamp The timestamp when upkeep was performed
      */
     event UpkeepPerformed(uint256 indexed tokenId, uint256 indexed round, uint256 timestamp);
-    
+
     // ============================================
     // State Variables
     // ============================================
@@ -49,7 +49,8 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     address public additionalPayeeReceiver;
 
     // guarded eth token swapper address
-    IGuardedEthTokenSwapper public guardedEthTokenSwapper = IGuardedEthTokenSwapper(0x7FFc0E3F2aC6ba73ada2063D3Ad8c5aF554ED05f);
+    IGuardedEthTokenSwapper public guardedEthTokenSwapper =
+        IGuardedEthTokenSwapper(0x7FFc0E3F2aC6ba73ada2063D3Ad8c5aF554ED05f);
 
     // latest received token id
     uint256 public latestReceivedTokenId;
@@ -79,18 +80,9 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         uint128 createdAt; // timestamp when the token was created/first price history entry
         uint32 intervalLengthSeconds; // length of each interval in seconds (12 intervals is total length)
     }
-    
+
     // mapping of token id to token metadata
     mapping(uint256 tokenId => TokenMetadata) public tokenMetadata;
-
-    // Track the current round for each token (for idempotency)
-    mapping(uint256 => uint256) public tokenRound;
-    
-    // Track the last upkeep timestamp for each token
-    mapping(uint256 => uint256) public lastUpkeepTimestamp;
-    
-    // Track whether a specific round has been executed for a token
-    mapping(uint256 => mapping(uint256 => bool)) public roundExecuted;
 
     // modifier to only allow the additional payee receiver to receive funds
     modifier onlyAdditionalPayeeReceiver() {
@@ -167,14 +159,155 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         });
         TokenMetadata storage t = tokenMetadata[tokenId];
         t.tokenType = tokenType;
-        t. tokenBalance = tokenBalance;
+        t.tokenBalance = tokenBalance;
         t.createdAt = uint128(block.timestamp);
-        t. intervalLengthSeconds = uint32(intervalLengthSeconds);
-        
+        t.intervalLengthSeconds = uint32(intervalLengthSeconds);
+
         // record the first price history entry
         // @dev we pull from the oracle for consistency
         _appendPriceHistoryEntry(tokenId, tokenType);
+        // @dev price history array length is the round number, so we don't need to increment it separately
+    }
 
+    /**
+     * @notice Execution logic to be executed when a token's PMP is configured.
+     * @dev This hook is executed after the PMP is configured.
+     * Revert here if the configuration should not be allowed.
+     * @param coreContract The address of the core contract that was configured.
+     * @param tokenId The tokenId of the token that was configured.
+     * @param pmpInput The PMP input that was used to successfully configure the token.
+     */
+    function onTokenPMPConfigure(address coreContract, uint256 tokenId, IPMPV0.PMPInput calldata pmpInput)
+        external
+        view
+        override
+    {
+        // Add your custom validation logic here
+        // This runs when a user configures PMPs for their token
+
+        // Example: Check if specific keys are being configured
+        // if (keccak256(bytes(pmpInput.key)) == _HASHED_KEY_EXAMPLE) {
+        //     // Validate the configuration
+        //     require(someCondition, "Configuration validation failed");
+        // }
+
+        // If you don't revert, the configuration is accepted
+    }
+
+    /**
+     * @notice Augment the token parameters for a given token.
+     * @dev This hook is called when a token's PMPs are read.
+     * @dev This must return all desired tokenParams, not just additional data.
+     * @param coreContract The address of the core contract being queried.
+     * @param tokenId The tokenId of the token being queried.
+     * @param tokenParams The token parameters for the queried token.
+     * @return augmentedTokenParams The augmented token parameters.
+     */
+    function onTokenPMPReadAugmentation(
+        address coreContract,
+        uint256 tokenId,
+        IWeb3Call.TokenParam[] calldata tokenParams
+    ) external view override returns (IWeb3Call.TokenParam[] memory augmentedTokenParams) {
+        // Add your custom augmentation logic here
+        // This runs when token parameters are read
+
+        // Example: Simply return the original params (no augmentation)
+        augmentedTokenParams = tokenParams;
+
+        // Or you can modify/inject new parameters:
+        // 1. Create a new array with space for additional params
+        // 2. Copy over existing params (optionally filtering some out)
+        // 3. Add new params
+        // 4. Return the augmented array
+
+        return augmentedTokenParams;
+    }
+
+    /**
+     * @notice ERC165 interface support
+     * @param interfaceId The interface identifier to check
+     * @return bool True if the interface is supported
+     */
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(AbstractPMPAugmentHook, AbstractPMPConfigureHook)
+        returns (bool)
+    {
+        return interfaceId == type(IPMPAugmentHook).interfaceId || interfaceId == type(IPMPConfigureHook).interfaceId
+            || super.supportsInterface(interfaceId);
+    }
+
+    // ============================================
+    // Chainlink Automation Functions
+    // ============================================
+
+    /**
+     * @notice Checks if upkeep is needed for a token
+     * WARNING: This function iterates over all tokens, and is intended for off-chain view calls only.
+     * @dev input checkData is ignored, we check all tokens here
+     * @dev This function is called off-chain by Chainlink Automation
+     * @return upkeepNeeded Boolean indicating if upkeep is needed
+     * @return performData ABI-encoded (uint256 tokenId, uint256 round) to pass to performUpkeep
+     */
+    function checkUpkeep(bytes calldata) external view override returns (bool upkeepNeeded, bytes memory performData) {
+        // we don't need any specific input checkData - we check all tokens here, and return the first found
+
+        uint256 maxTokenId = latestReceivedTokenId;
+        uint256 minTokenId = (latestReceivedTokenId / 1_000_000) * 1_000_000; // token 0 id
+        for (uint256 tokenId_ = minTokenId; tokenId_ <= maxTokenId; tokenId_++) {
+            // Get the current round for this token
+            TokenMetadata storage t = tokenMetadata[tokenId_];
+            uint256 currentRound = t.priceHistory.length;
+            // if current round is 12, we know this token has already been fully updated
+            if (currentRound == 12) {
+                continue;
+            }
+            // if block timestamp is greater than the initial timestamp + interval length * current round, we need to perform upkeep
+            if (block.timestamp > t.createdAt + t.intervalLengthSeconds * currentRound) {
+                upkeepNeeded = true;
+                performData = abi.encode(tokenId_, currentRound);
+                return (upkeepNeeded, performData);
+            }
+        }
+        // no upkeep needed
+
+        return (false, "");
+    }
+
+    /**
+     * @notice Performs the upkeep for a token
+     * @dev This function is called on-chain by Chainlink Automation
+     * @param performData ABI-encoded (uint256 tokenId, uint256 round)
+     */
+    function performUpkeep(bytes calldata performData) external override onlyKeeper {
+        // CHECKS
+        // Decode tokenId and round
+        (uint256 tokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
+        // Verify this is the current round (prevents stale upkeeps)
+        TokenMetadata storage t = tokenMetadata[tokenId];
+        require(round == t.priceHistory.length, "Stale upkeep");
+        // verify block timestamp requirements
+        require(block.timestamp > t.createdAt + t.intervalLengthSeconds * round, "Block timestamp requirements not met");
+
+        // EFFECTS
+        // Perform the actual upkeep for the token
+        // append a price history entry
+        _appendPriceHistoryEntry(tokenId, t.tokenType);
+        // @dev price history array length is the round number, so we don't need to increment it separately
+
+        // Emit event
+        emit UpkeepPerformed(tokenId, round, block.timestamp);
+    }
+
+    // ============================================
+    // Internal Helper Functions
+    // ============================================
+
+    function _getIntervalLengthSecondsFromTokenHash(bytes32 tokenHash) internal view virtual returns (uint32) {
+        // TODO - implement this better, this is a placeholder
+        // 5 days + 7 days * (tokenHash % 10)
+        return uint32((5 days) + (7 days * (uint256(tokenHash) % 10)));
     }
 
     /**
@@ -187,7 +320,7 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     function _appendPriceHistoryEntry(uint256 tokenId, TokenType tokenType) internal {
         // @dev we pull from the oracle for consistency
         address tokenAddress = _getTokenAddressFromTokenType(tokenType);
-        (uint256 price, ) = guardedEthTokenSwapper.getTokenPrice(tokenAddress);
+        (uint256 price,) = guardedEthTokenSwapper.getTokenPrice(tokenAddress);
         // populate result in tokenMetadata by appending to the price history
         tokenMetadata[tokenId].priceHistory.push(price);
     }
@@ -214,203 +347,6 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         if (tokenType == TokenType.WBTC) return 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
         if (tokenType == TokenType.ZRX) return 0xE41d2489571d322189246DaFA5ebDe1F4699F498;
         revert("Invalid token type");
-    }
-
-    /**
-     * @notice Execution logic to be executed when a token's PMP is configured.
-     * @dev This hook is executed after the PMP is configured.
-     * Revert here if the configuration should not be allowed.
-     * @param coreContract The address of the core contract that was configured.
-     * @param tokenId The tokenId of the token that was configured.
-     * @param pmpInput The PMP input that was used to successfully configure the token.
-     */
-    function onTokenPMPConfigure(
-        address coreContract,
-        uint256 tokenId,
-        IPMPV0.PMPInput calldata pmpInput
-    ) external view override {
-        // Add your custom validation logic here
-        // This runs when a user configures PMPs for their token
-        
-        // Example: Check if specific keys are being configured
-        // if (keccak256(bytes(pmpInput.key)) == _HASHED_KEY_EXAMPLE) {
-        //     // Validate the configuration
-        //     require(someCondition, "Configuration validation failed");
-        // }
-        
-        // If you don't revert, the configuration is accepted
-    }
-
-    /**
-     * @notice Augment the token parameters for a given token.
-     * @dev This hook is called when a token's PMPs are read.
-     * @dev This must return all desired tokenParams, not just additional data.
-     * @param coreContract The address of the core contract being queried.
-     * @param tokenId The tokenId of the token being queried.
-     * @param tokenParams The token parameters for the queried token.
-     * @return augmentedTokenParams The augmented token parameters.
-     */
-    function onTokenPMPReadAugmentation(
-        address coreContract,
-        uint256 tokenId,
-        IWeb3Call.TokenParam[] calldata tokenParams
-    )
-        external
-        view
-        override
-        returns (IWeb3Call.TokenParam[] memory augmentedTokenParams)
-    {
-        // Add your custom augmentation logic here
-        // This runs when token parameters are read
-        
-        // Example: Simply return the original params (no augmentation)
-        augmentedTokenParams = tokenParams;
-        
-        // Or you can modify/inject new parameters:
-        // 1. Create a new array with space for additional params
-        // 2. Copy over existing params (optionally filtering some out)
-        // 3. Add new params
-        // 4. Return the augmented array
-        
-        return augmentedTokenParams;
-    }
-
-    /**
-     * @notice ERC165 interface support
-     * @param interfaceId The interface identifier to check
-     * @return bool True if the interface is supported
-     */
-    function supportsInterface(
-        bytes4 interfaceId
-    )
-        public
-        view
-        override(AbstractPMPAugmentHook, AbstractPMPConfigureHook)
-        returns (bool)
-    {
-        return
-            interfaceId == type(IPMPAugmentHook).interfaceId ||
-            interfaceId == type(IPMPConfigureHook).interfaceId ||
-            super.supportsInterface(interfaceId);
-    }
-
-    // ============================================
-    // Chainlink Automation Functions
-    // ============================================
-
-    /**
-     * @notice Checks if upkeep is needed for a token
-     * @dev This function is called off-chain by Chainlink Automation
-     * @param checkData ABI-encoded uint256 tokenId
-     * @return upkeepNeeded Boolean indicating if upkeep is needed
-     * @return performData ABI-encoded (uint256 tokenId, uint256 round) to pass to performUpkeep
-     */
-    function checkUpkeep(bytes calldata checkData)
-        external
-        view
-        override
-        returns (bool upkeepNeeded, bytes memory performData)
-    {
-        // Decode the tokenId from checkData
-        uint256 tokenId = abi.decode(checkData, (uint256));
-        
-        // Get the current round for this token
-        uint256 currentRound = tokenRound[tokenId];
-        
-        // Check if this round has already been executed
-        bool alreadyExecuted = roundExecuted[tokenId][currentRound];
-        
-        // Determine if upkeep is needed
-        // Add your custom logic here to determine when upkeep should be performed
-        // Example conditions:
-        // - Time-based: enough time has passed since last upkeep
-        // - Event-based: some condition has changed
-        // - State-based: token is in a state requiring action
-        
-        // Example: Perform upkeep if not yet executed for current round
-        // In a real implementation, you'd check specific conditions
-        upkeepNeeded = !alreadyExecuted && _shouldPerformUpkeep(tokenId);
-        
-        if (upkeepNeeded) {
-            // Encode tokenId and current round for idempotency
-            performData = abi.encode(tokenId, currentRound);
-        }
-        
-        return (upkeepNeeded, performData);
-    }
-
-    /**
-     * @notice Performs the upkeep for a token
-     * @dev This function is called on-chain by Chainlink Automation
-     * @param performData ABI-encoded (uint256 tokenId, uint256 round)
-     */
-    function performUpkeep(bytes calldata performData) external override onlyKeeper() {
-        // Decode tokenId and round
-        (uint256 tokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
-        
-        // Verify this is the current round (prevents stale upkeeps)
-        require(round == tokenRound[tokenId], "Stale upkeep");
-        
-        // Ensure idempotency: check if this round was already executed
-        require(!roundExecuted[tokenId][round], "Round already executed");
-        
-        // Mark this round as executed
-        roundExecuted[tokenId][round] = true;
-        
-        // Update last upkeep timestamp
-        lastUpkeepTimestamp[tokenId] = block.timestamp;
-        
-        // Increment the round for next upkeep
-        tokenRound[tokenId]++;
-        
-        // Perform the actual upkeep logic here
-        _performTokenUpkeep(tokenId, round);
-        
-        // Emit event
-        emit UpkeepPerformed(tokenId, round, block.timestamp);
-    }
-
-    // ============================================
-    // Internal Helper Functions
-    // ============================================
-
-    /**
-     * @notice Determines if upkeep should be performed for a token
-     * @dev Override this function with your custom logic
-     * @param tokenId The token ID to check
-     * @return bool True if upkeep should be performed
-     */
-    function _shouldPerformUpkeep(uint256 tokenId) internal view virtual returns (bool) {
-        // Add your custom condition logic here
-        // Example: Check if enough time has passed
-        // Example: Check if token state requires action
-        // Example: Check external conditions
-        
-        // Default implementation: always return false
-        // Override this in your implementation
-        return false;
-    }
-
-    /**
-     * @notice Performs the actual upkeep logic for a token
-     * @dev Override this function with your custom upkeep actions
-     * @param tokenId The token ID to perform upkeep for
-     * @param round The round number (for reference in your logic)
-     */
-    function _performTokenUpkeep(uint256 tokenId, uint256 round) internal virtual {
-        // Add your custom upkeep logic here
-        // Example: Execute a token swap
-        // Example: Update token parameters
-        // Example: Trigger external actions
-        // Example: Call GuardedEthTokenSwapper
-        // This is where you'd implement your strategy-specific logic
-        // For example, calling GuardedEthTokenSwapper, updating PMPs, etc.
-    }
-
-    function _getIntervalLengthSecondsFromTokenHash(bytes32 tokenHash) internal view virtual returns (uint32) {
-        // TODO - implement this better, this is a placeholder
-        // 5 days + 7 days * (tokenHash % 10)
-        return uint32((5 days) + (7 days * (uint256(tokenHash) % 10)));
     }
 }
 

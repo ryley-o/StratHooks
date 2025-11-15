@@ -72,23 +72,6 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         ZRX
     }
 
-    address[] public tokenAddresses = [
-        0x111111111117dC0aa78b770fA6A738034120C302, // 1INCH
-        0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9, // AAVE
-        0x4d224452801ACEd8B2F0aebE155379bb5D594381, // APE
-        0x0D8775F648430679A709E98d2b0Cb6250d2887EF, // BAT
-        0xc00e94Cb662C3520282E6f5717214004A7f26888, // COMP
-        0xD533a949740bb3306d119CC777fa900bA034cd52, // CRV
-        0xdAC17F958D2ee523a2206206994597C13D831ec7, // USDT
-        0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32, // LDO
-        0x514910771AF9Ca656af840dff83E8264EcF986CA, // LINK
-        0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2, // MKR
-        0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE, // SHIB
-        0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984, // UNI
-        0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599, // WBTC
-        0xE41d2489571d322189246DaFA5ebDe1F4699F498 // ZRX
-    ];
-
     struct TokenMetadata {
         TokenType tokenType;
         uint256 tokenBalance; // no decimals, raw value
@@ -215,8 +198,22 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
      * @param tokenType The token type to get the address for
      * @return tokenAddress The token address
      */
-    function _getTokenAddressFromTokenType(TokenType tokenType) internal view returns (address) {
-        return tokenAddresses[uint256(tokenType)];
+    function _getTokenAddressFromTokenType(TokenType tokenType) internal pure returns (address) {
+        if (tokenType == TokenType.ONEINCH) return 0x111111111117dC0aa78b770fA6A738034120C302;
+        if (tokenType == TokenType.AAVE) return 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
+        if (tokenType == TokenType.APE) return 0x4d224452801ACEd8B2F0aebE155379bb5D594381;
+        if (tokenType == TokenType.BAT) return 0x0D8775F648430679A709E98d2b0Cb6250d2887EF;
+        if (tokenType == TokenType.COMP) return 0xc00e94Cb662C3520282E6f5717214004A7f26888;
+        if (tokenType == TokenType.CRV) return 0xD533a949740bb3306d119CC777fa900bA034cd52;
+        if (tokenType == TokenType.USDT) return 0xdAC17F958D2ee523a2206206994597C13D831ec7;
+        if (tokenType == TokenType.LDO) return 0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32;
+        if (tokenType == TokenType.LINK) return 0x514910771AF9Ca656af840dff83E8264EcF986CA;
+        if (tokenType == TokenType.MKR) return 0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2;
+        if (tokenType == TokenType.SHIB) return 0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE;
+        if (tokenType == TokenType.UNI) return 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984;
+        if (tokenType == TokenType.WBTC) return 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
+        if (tokenType == TokenType.ZRX) return 0xE41d2489571d322189246DaFA5ebDe1F4699F498;
+        revert("Invalid token type");
     }
 
     /**

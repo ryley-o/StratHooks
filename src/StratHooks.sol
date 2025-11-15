@@ -371,9 +371,18 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     // ============================================
 
     function _getIntervalLengthSecondsFromTokenHash(bytes32 tokenHash) internal view virtual returns (uint32) {
-        // TODO - implement this better, this is a placeholder
-        // 5 days + 7 days * (tokenHash % 10)
-        return uint32((5 days) + (7 days * (uint256(tokenHash) % 10)));
+        // get value between 0 and 7 from the token hash
+        uint256 value = uint256(tokenHash) % 16;
+        // return the interval length in seconds
+        if (value == 0) return 1 days; // 11 days total rare
+        if (value <= 2) return 3 days; // 33 days total
+        if (value <= 4) return 5 days; // 60 days total
+        if (value <= 7) return 7 days; // 77 days total common
+        if (value <= 10) return 9 days; // 99 days total common
+        if (value <= 12) return 15 days; // 165 days total
+        if (value <= 14) return 21 days; // 231 days total
+        if (value <= 15) return 33 days; // 363 days total rare
+        revert("Invalid value");
     }
 
     /**

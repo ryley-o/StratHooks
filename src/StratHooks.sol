@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // Created By: Art Blocks Inc. & Contributors
 
-pragma solidity 0.8.22;
+pragma solidity 0.8.24;
 
 import {AbstractPMPAugmentHook} from "./abstract/AbstractPMPAugmentHook.sol";
 import {AbstractPMPConfigureHook} from "./abstract/AbstractPMPConfigureHook.sol";
@@ -13,6 +13,7 @@ import {IPMPAugmentHook} from "./interfaces/IPMPAugmentHook.sol";
 import {IGuardedEthTokenSwapper} from "./interfaces/IGuardedEthTokenSwapper.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -28,6 +29,9 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * Implements Chainlink Automation for automated upkeep of token states.
  */
 contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, AutomationCompatibleInterface, Ownable {
+    using Strings for uint256;
+    using Strings for uint128;
+    using Strings for uint32;
     // ============================================
     // Events
     // ============================================
@@ -224,6 +228,17 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
 
     /**
      * @notice Augment the token parameters for a given token.
+     * Appends 17 items (5 metadata + 12 price history) to the token parameters.
+     * - <original token params> (expect IsWithdrawn from PMPV0)
+     * - tokenSymbol
+     * - tokenBalance
+     * - createdAt
+     * - intervalLengthSeconds
+     * - priceHistoryLength
+     * - priceHistory0
+     * - priceHistory1
+     * - ...
+     * - priceHistory11
      * @dev This hook is called when a token's PMPs are read.
      * @dev This must return all desired tokenParams, not just additional data.
      * @param coreContract The address of the core contract being queried.
@@ -236,17 +251,40 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         uint256 tokenId,
         IWeb3Call.TokenParam[] calldata tokenParams
     ) external view override returns (IWeb3Call.TokenParam[] memory augmentedTokenParams) {
-        // Add your custom augmentation logic here
-        // This runs when token parameters are read
-
-        // Example: Simply return the original params (no augmentation)
-        augmentedTokenParams = tokenParams;
-
-        // Or you can modify/inject new parameters:
-        // 1. Create a new array with space for additional params
-        // 2. Copy over existing params (optionally filtering some out)
-        // 3. Add new params
-        // 4. Return the augmented array
+        // we keep all existing token params, and append 17 items (5 metadata + 12 price history)
+        uint256 originalLength = tokenParams.length;
+        augmentedTokenParams = new IWeb3Call.TokenParam[](originalLength + 17);
+        for (uint256 i = 0; i < originalLength; i++) {
+            augmentedTokenParams[i] = tokenParams[i];
+        }
+        // append token token symbol
+        TokenMetadata storage t = tokenMetadata[tokenId];
+        augmentedTokenParams[originalLength] =
+            IWeb3Call.TokenParam({key: "tokenSymbol", value: _getTokenSymbolFromTokenType(t.tokenType)});
+        // append token token balance
+        augmentedTokenParams[originalLength + 1] =
+            IWeb3Call.TokenParam({key: "tokenBalance", value: t.tokenBalance.toString()});
+        // append token token created at
+        augmentedTokenParams[originalLength + 2] =
+            IWeb3Call.TokenParam({key: "createdAt", value: t.createdAt.toString()});
+        // append token token interval length seconds
+        augmentedTokenParams[originalLength + 3] =
+            IWeb3Call.TokenParam({key: "intervalLengthSeconds", value: t.intervalLengthSeconds.toString()});
+        // append token token price history length
+        uint256 priceHistoryLength = t.priceHistory.length;
+        augmentedTokenParams[originalLength + 4] =
+            IWeb3Call.TokenParam({key: "priceHistoryLength", value: priceHistoryLength.toString()});
+        // append token token price history (up to 12 entries, 0 if not available)
+        for (uint256 i = 0; i < 12; i++) {
+            string memory priceValue;
+            if (i < priceHistoryLength) {
+                priceValue = t.priceHistory[i].toString();
+            } else {
+                priceValue = "0";
+            }
+            augmentedTokenParams[originalLength + 5 + i] =
+                IWeb3Call.TokenParam({key: string.concat("priceHistory", i.toString()), value: priceValue});
+        }
 
         return augmentedTokenParams;
     }
@@ -374,6 +412,24 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         if (tokenType == TokenType.UNI) return 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984;
         if (tokenType == TokenType.WBTC) return 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599;
         if (tokenType == TokenType.ZRX) return 0xE41d2489571d322189246DaFA5ebDe1F4699F498;
+        revert("Invalid token type");
+    }
+
+    function _getTokenSymbolFromTokenType(TokenType tokenType) internal pure returns (string memory) {
+        if (tokenType == TokenType.ONEINCH) return "1INCH";
+        if (tokenType == TokenType.AAVE) return "AAVE";
+        if (tokenType == TokenType.APE) return "APE";
+        if (tokenType == TokenType.BAT) return "BAT";
+        if (tokenType == TokenType.COMP) return "COMP";
+        if (tokenType == TokenType.CRV) return "CRV";
+        if (tokenType == TokenType.USDT) return "USDT";
+        if (tokenType == TokenType.LDO) return "LDO";
+        if (tokenType == TokenType.LINK) return "LINK";
+        if (tokenType == TokenType.MKR) return "MKR";
+        if (tokenType == TokenType.SHIB) return "SHIB";
+        if (tokenType == TokenType.UNI) return "UNI";
+        if (tokenType == TokenType.WBTC) return "WBTC";
+        if (tokenType == TokenType.ZRX) return "ZRX";
         revert("Invalid token type");
     }
 }

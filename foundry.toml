@@ -2,8 +2,8 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-solc = "0.8.22"
-evm_version = "paris"
+solc = "0.8.24"
+evm_version = "cancun"
 
 # Remappings for external dependencies
 # Note: Art Blocks contracts are stored locally in src/abstract/, src/interfaces/, and src/libs/

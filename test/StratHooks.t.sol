@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LGPL-3.0-only
-pragma solidity 0.8.22;
+pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {StratHooks} from "../src/StratHooks.sol";
@@ -458,10 +458,14 @@ contract StratHooksTest is Test {
         IWeb3Call.TokenParam[] memory augmented =
             hooks.onTokenPMPReadAugmentation(MOCK_CORE_CONTRACT, MOCK_TOKEN_ID, params);
 
-        // With default implementation, should return same params
-        assertEq(augmented.length, params.length);
+        // Implementation now adds 17 parameters (5 metadata + 12 price history entries, even if token not initialized)
+        assertEq(augmented.length, params.length + 17, "Should add 17 parameters");
+        // First param should still be the original
         assertEq(augmented[0].key, params[0].key);
         assertEq(augmented[0].value, params[0].value);
+        // Additional params should exist (with default/zero values for uninitialized token)
+        assertEq(augmented[1].key, "tokenSymbol");
+        assertEq(augmented[2].key, "tokenBalance");
     }
 
     // ============================================

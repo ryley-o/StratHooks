@@ -10,6 +10,7 @@ import {IPMPConfigureHook} from "../src/interfaces/IPMPConfigureHook.sol";
 import {IGuardedEthTokenSwapper} from "../src/interfaces/IGuardedEthTokenSwapper.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 // Mock ERC20 for testing
 contract MockERC20 is IERC20 {
@@ -197,8 +198,19 @@ contract StratHooksTest is Test {
         mockNFT = new MockERC721();
         mockToken = new MockERC20();
 
-        // Deploy hooks with new constructor params
-        hooks = new StratHooks(OWNER, ADDITIONAL_PAYEE_RECEIVER, KEEPER, address(mockNFT), PROJECT_ID);
+        // Deploy implementation
+        StratHooks implementation = new StratHooks();
+
+        // Prepare initializer data
+        bytes memory initData = abi.encodeWithSelector(
+            StratHooks.initialize.selector, OWNER, ADDITIONAL_PAYEE_RECEIVER, KEEPER, address(mockNFT), PROJECT_ID
+        );
+
+        // Deploy proxy
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+
+        // Cast proxy to StratHooks interface
+        hooks = StratHooks(address(proxy));
 
         // Set the mock swapper
         vm.prank(OWNER);

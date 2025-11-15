@@ -16,7 +16,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 /**
  * @title StratHooks
@@ -27,8 +29,16 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * Augment hooks run during reads to inject or modify parameters.
  *
  * Implements Chainlink Automation for automated upkeep of token states.
+ * @dev This contract is UUPS upgradeable.
  */
-contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, AutomationCompatibleInterface, Ownable {
+contract StratHooks is
+    Initializable,
+    AbstractPMPAugmentHook,
+    AbstractPMPConfigureHook,
+    AutomationCompatibleInterface,
+    OwnableUpgradeable,
+    UUPSUpgradeable
+{
     using Strings for uint256;
     using Strings for uint128;
     using Strings for uint32;
@@ -50,10 +60,38 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
 
     // PMPV0 contract address - hard-coded to mainnet
     address public constant PMPV0_CONTRACT_ADDRESS = 0x00000000A78E278b2d2e2935FaeBe19ee9F1FF14;
-    address public immutable CORE_CONTRACT_ADDRESS;
-    uint256 public immutable PROJECT_ID;
-    // keeper address allowed to perform upkeep
-    address public keeper;
+
+    /// @custom:storage-location erc7201:strathooks.storage.v1
+    struct StratHooksStorage {
+        address coreContractAddress;
+        uint256 projectId;
+        address keeper;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("strathooks.storage.v1")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant STRATHOOKS_STORAGE_LOCATION =
+        0x7c8d1d3f8e9b3a4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b00;
+
+    function _getStratHooksStorage() private pure returns (StratHooksStorage storage $) {
+        assembly {
+            $.slot := STRATHOOKS_STORAGE_LOCATION
+        }
+    }
+
+    /// @notice The core contract address (stored in upgradeable storage)
+    function CORE_CONTRACT_ADDRESS() public view returns (address) {
+        return _getStratHooksStorage().coreContractAddress;
+    }
+
+    /// @notice The project ID (stored in upgradeable storage)
+    function PROJECT_ID() public view returns (uint256) {
+        return _getStratHooksStorage().projectId;
+    }
+
+    /// @notice The keeper address allowed to perform upkeep
+    function keeper() public view returns (address) {
+        return _getStratHooksStorage().keeper;
+    }
 
     // additional payee receiver address allowed to assign funds to a token
     address public additionalPayeeReceiver;
@@ -103,26 +141,44 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
 
     // modifier to only allow the keeper to perform upkeep
     modifier onlyKeeper() {
-        require(msg.sender == keeper, "Not keeper");
+        require(msg.sender == keeper(), "Not keeper");
         _;
     }
 
     /**
-     * @notice Constructor
-     * @dev Add any initialization parameters needed for your hooks
+     * @notice Constructor - disabled for upgradeable contracts
+     * @dev Locks the implementation contract to prevent initialization
      */
-    constructor(
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    /**
+     * @notice Initialize the contract (replaces constructor for upgradeable contracts)
+     * @param owner_ The owner address
+     * @param additionalPayeeReceiver_ The additional payee receiver address
+     * @param keeper_ The keeper address
+     * @param coreContract_ The core contract address
+     * @param projectId_ The project ID
+     */
+    function initialize(
         address owner_,
         address additionalPayeeReceiver_,
         address keeper_,
         address coreContract_,
         uint256 projectId_
-    ) Ownable(owner_) {
-        // Initialize any immutable or mutable state variables here
+    ) public initializer {
+        __Ownable_init(owner_);
+        __UUPSUpgradeable_init();
+
+        // Initialize state variables
         additionalPayeeReceiver = additionalPayeeReceiver_;
-        keeper = keeper_;
-        CORE_CONTRACT_ADDRESS = coreContract_;
-        PROJECT_ID = projectId_;
+
+        StratHooksStorage storage $ = _getStratHooksStorage();
+        $.keeper = keeper_;
+        $.coreContractAddress = coreContract_;
+        $.projectId = projectId_;
     }
 
     /**
@@ -131,7 +187,8 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
      * @param newKeeper The new keeper address
      */
     function setKeeper(address newKeeper) external onlyOwner {
-        keeper = newKeeper;
+        StratHooksStorage storage $ = _getStratHooksStorage();
+        $.keeper = newKeeper;
     }
 
     /**
@@ -204,9 +261,9 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         // only allow if PMPV0 is calling
         require(msg.sender == PMPV0_CONTRACT_ADDRESS, "Only PMPV0 can call");
         // only allow if core contract is the configured core contract
-        require(coreContract == CORE_CONTRACT_ADDRESS, "Core contract mismatch");
+        require(coreContract == CORE_CONTRACT_ADDRESS(), "Core contract mismatch");
         // only allow if token id is from the configured project id
-        require(tokenId / 1_000_000 == PROJECT_ID, "Project id mismatch");
+        require(tokenId / 1_000_000 == PROJECT_ID(), "Project id mismatch");
         // only allow if pmp input key is the configured pmp input key
         require(keccak256(bytes(pmpInput.key)) == keccak256(bytes("IsWithdrawn")), "Invalid PMP input key");
         // only allow if pmp input value is currently false
@@ -220,7 +277,7 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         t.isWithdrawn = true;
         // INTERACTIONS
         // send the token balance to the token owner
-        address tokenOwner = IERC721(CORE_CONTRACT_ADDRESS).ownerOf(tokenId);
+        address tokenOwner = IERC721(CORE_CONTRACT_ADDRESS()).ownerOf(tokenId);
         // send the token balance to the token owner
         address tokenAddress = _getTokenAddressFromTokenType(t.tokenType);
         IERC20(tokenAddress).transfer(tokenOwner, t.tokenBalance);
@@ -441,5 +498,16 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
         if (tokenType == TokenType.ZRX) return "ZRX";
         revert("Invalid token type");
     }
+
+    // ============================================
+    // UUPS Upgrade Authorization
+    // ============================================
+
+    /**
+     * @notice Authorize an upgrade to a new implementation
+     * @dev Only the owner can authorize an upgrade
+     * @param newImplementation The address of the new implementation
+     */
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 }
 

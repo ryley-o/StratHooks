@@ -41,10 +41,13 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     // State Variables
     // ============================================
 
-    // latest received token id
-    uint256 public latestReceivedTokenId;
+    // keeper address allowed to perform upkeep
+    address public keeper;
 
     address public additionalPayeeReceiver;
+
+    // latest received token id
+    uint256 public latestReceivedTokenId;
 
     // TODO - make this in sync
     enum TokenType {
@@ -83,8 +86,15 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
     // import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthTokenSwapper.sol";
     // address public constant GUARDED_SWAPPER = 0x96E6a25565E998C6EcB98a59CC87F7Fc5Ed4D7b0;
 
+    // modifier to only allow the additional payee receiver to receive funds
     modifier onlyAdditionalPayeeReceiver() {
         require(msg.sender == additionalPayeeReceiver, "Not additional payee receiver");
+        _;
+    }
+
+    // modifier to only allow the keeper to perform upkeep
+    modifier onlyKeeper() {
+        require(msg.sender == keeper, "Not keeper");
         _;
     }
 
@@ -92,9 +102,28 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
      * @notice Constructor
      * @dev Add any initialization parameters needed for your hooks
      */
-    constructor(address owner_, address additionalPayeeReceiver_) Ownable(owner_) {
-        // Initialize any immutable state variables here
+    constructor(address owner_, address additionalPayeeReceiver_, address keeper_) Ownable(owner_) {
+        // Initialize any immutable or mutable state variables here
         additionalPayeeReceiver = additionalPayeeReceiver_;
+        keeper = keeper_;
+    }
+
+    /**
+     * @notice Set the keeper address
+     * @dev Only the owner can set the keeper address
+     * @param newKeeper The new keeper address
+     */
+    function setKeeper(address newKeeper) external onlyOwner {
+        keeper = newKeeper;
+    }
+
+    /**
+     * @notice Set the additional payee receiver address
+     * @dev Only the owner can set the additional payee receiver address
+     * @param newAdditionalPayeeReceiver The new additional payee receiver address
+     */
+    function setAdditionalPayeeReceiver(address newAdditionalPayeeReceiver) external onlyOwner {
+        additionalPayeeReceiver = newAdditionalPayeeReceiver;
     }
 
     /**
@@ -256,7 +285,7 @@ contract StratHooks is AbstractPMPAugmentHook, AbstractPMPConfigureHook, Automat
      * @dev This function is called on-chain by Chainlink Automation
      * @param performData ABI-encoded (uint256 tokenId, uint256 round)
      */
-    function performUpkeep(bytes calldata performData) external override {
+    function performUpkeep(bytes calldata performData) external override onlyKeeper() {
         // Decode tokenId and round
         (uint256 tokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
         

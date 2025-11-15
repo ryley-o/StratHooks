@@ -12,11 +12,11 @@ contract DeployScript is Script {
         // Read constructor parameters from environment
         address owner = vm.envAddress("OWNER_ADDRESS");
         address additionalPayeeReceiver = vm.envAddress("ADDITIONAL_PAYEE_RECEIVER");
-        
+        address keeper = vm.envAddress("KEEPER_ADDRESS");
         vm.startBroadcast(deployerPrivateKey);
         
         // Deploy StratHooks
-        StratHooks hooks = new StratHooks(owner, additionalPayeeReceiver);
+        StratHooks hooks = new StratHooks(owner, additionalPayeeReceiver, keeper);
         
         vm.stopBroadcast();
         

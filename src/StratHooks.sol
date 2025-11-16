@@ -218,7 +218,7 @@ contract StratHooks is
      */
     function receiveFunds(uint256 tokenId, bytes32 tokenHash) external payable onlyAdditionalPayeeReceiver {
         // CHECKS
-        // only additional payee receiver may call
+        // must receive sequentially
         require(latestReceivedTokenId == 0 || latestReceivedTokenId == tokenId - 1, "Invalid token id");
 
         // EFFECTS
@@ -429,7 +429,8 @@ contract StratHooks is
 
     function _getIntervalLengthSecondsFromTokenHash(bytes32 tokenHash) internal view virtual returns (uint32) {
         // get value between 0 and 7 from the token hash
-        uint256 value = uint256(tokenHash) % 16;
+        // hash the hash to avoid correlation between token type and interval length
+        uint256 value = uint256(keccak256(abi.encode(tokenHash))) % 16;
         // return the interval length in seconds
         if (value == 0) return 1 days; // 11 days total rare
         if (value <= 2) return 3 days; // 33 days total

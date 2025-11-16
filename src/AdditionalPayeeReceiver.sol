@@ -3,10 +3,14 @@
 
 pragma solidity 0.8.24;
 
+import {IGenArt721CoreContractV3_Base} from "./interfaces/IGenArt721CoreContractV3_Base.sol";
+import {StratHooks} from "./StratHooks.sol";
+
 /**
  * @title AdditionalPayeeReceiver
  * @author Art Blocks Inc. & Contributors
  * @notice This contract receives funds from mints and distributes them appropriately.
+ * Assumes the core contract will only mint one token at a time, so latest invocation is mint to be funded atomically.
  * @dev Only accepts funds from the configured allowed sender (core contract).
  */
 contract AdditionalPayeeReceiver {
@@ -35,6 +39,9 @@ contract AdditionalPayeeReceiver {
     /// @notice The project ID for this project
     uint256 public immutable projectId;
 
+    /// @notice The strat hooks contract address for this project
+    address public immutable stratHooks;
+
     // ============================================
     // Errors
     // ============================================
@@ -48,14 +55,16 @@ contract AdditionalPayeeReceiver {
 
     /**
      * @notice Constructor
-     * @param allowedSender_ The address of the only allowed sender
+     * @param allowedSender_ The address of the only allowed sender - expected to be the minter contract
      * @param coreContract_ The address of the core contract
      * @param projectId_ The project ID
+     * @param stratHooks_ The address of the strat hooks contract
      */
-    constructor(address allowedSender_, address coreContract_, uint256 projectId_) {
+    constructor(address allowedSender_, address coreContract_, uint256 projectId_, address stratHooks_) {
         allowedSender = allowedSender_;
         coreContract = coreContract_;
         projectId = projectId_;
+        stratHooks = stratHooks_;
     }
 
     // ============================================
@@ -73,19 +82,14 @@ contract AdditionalPayeeReceiver {
         if (msg.sender != allowedSender) {
             revert UnauthorizedSender(msg.sender);
         }
+        // get most recently minted token id on our core contract's project
+        (uint256 invocations,,,,,) = IGenArt721CoreContractV3_Base(coreContract).projectStateData(projectId);
+        uint256 tokenId = projectId * 1_000_000 + invocations - 1;
+        bytes32 tokenHash = IGenArt721CoreContractV3_Base(coreContract).tokenIdToHash(tokenId);
 
         // EFFECTS & INTERACTIONS
-        // TODO: Implement proper logic to:
-        // 1. Determine the token ID from the transaction context
-        // 2. Call StratHooks.receiveFunds() with the token ID and hash
-        // 3. Distribute remaining funds appropriately
-
-        // Placeholder: emit event for now
-        uint256 tokenId = 0; // TODO: Get actual token ID from context
-        emit FundsReceived(msg.sender, msg.value, tokenId);
-
-        // Placeholder implementation - funds are held in this contract
-        // In production, this should forward funds to StratHooks or other recipients
+        // forward on the funds to StratHooks with appropriate metadata
+        StratHooks(stratHooks).receiveFunds{value: msg.value}({tokenId: tokenId, tokenHash: tokenHash});
     }
 
     // ============================================

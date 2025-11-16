@@ -155,10 +155,7 @@ contract MockGuardedEthTokenSwapper is IGuardedEthTokenSwapper {
         return mockSwapReturn;
     }
 
-    function setFeeds(address[] calldata, address[] calldata, uint24[] calldata, uint16[] calldata)
-        external
-        override
-    {}
+    function setFeeds(address[] calldata, address[] calldata, uint24[] calldata, uint16[] calldata) external override {}
 
     function removeFeed(address) external override {}
 
@@ -345,9 +342,7 @@ contract AdditionalPayeeReceiverTest is Test {
 
             assertTrue(success, "Should succeed");
             assertEq(address(receiver).balance, 0, "Receiver balance should be 0");
-            assertEq(
-                address(hooks).balance - hookBalanceBefore, amounts[i], "Hooks should receive correct amount"
-            );
+            assertEq(address(hooks).balance - hookBalanceBefore, amounts[i], "Hooks should receive correct amount");
         }
     }
 
@@ -395,9 +390,7 @@ contract AdditionalPayeeReceiverTest is Test {
 
         vm.deal(unauthorizedSender, 1 ether);
         vm.prank(unauthorizedSender);
-        vm.expectRevert(
-            abi.encodeWithSelector(AdditionalPayeeReceiver.UnauthorizedSender.selector, unauthorizedSender)
-        );
+        vm.expectRevert(abi.encodeWithSelector(AdditionalPayeeReceiver.UnauthorizedSender.selector, unauthorizedSender));
         address(receiver).call{value: 1 ether}("");
     }
 

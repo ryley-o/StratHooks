@@ -121,6 +121,7 @@ contract MockGuardedEthTokenSwapper is IGuardedEthTokenSwapper {
     uint256 public mockSwapReturn = 1000e18; // Default return 1000 tokens
     uint256 public mockPrice = 0.004e18; // Default price 0.004 ETH per token
     uint8 public mockDecimals = 18;
+    uint256 public lastReceivedEth; // Track last received ETH amount
 
     function setMockSwapReturn(uint256 _amount) external {
         mockSwapReturn = _amount;
@@ -137,6 +138,8 @@ contract MockGuardedEthTokenSwapper is IGuardedEthTokenSwapper {
         override
         returns (uint256 amountOut)
     {
+        // Track received ETH for testing
+        lastReceivedEth = msg.value;
         // Simple mock: return mockSwapReturn
         return mockSwapReturn;
     }
@@ -1277,6 +1280,64 @@ contract StratHooksTest is Test {
         // But we can verify the metadata exists
         (, uint256 tokenBalance,,,,) = hooks.tokenMetadata(tokenId);
         assertGt(tokenBalance, 0, "Token balance should be set");
+    }
+
+    function test_ReceiveFunds_ForwardsEthToSwapper() public {
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+
+        // Test with various ETH amounts
+        uint256[] memory amounts = new uint256[](4);
+        amounts[0] = 0.1 ether;
+        amounts[1] = 0.5 ether;
+        amounts[2] = 1 ether;
+        amounts[3] = 5 ether;
+
+        for (uint256 i = 0; i < amounts.length; i++) {
+            uint256 testTokenId = tokenId + i;
+            
+            // Reset lastReceivedEth
+            vm.store(address(mockSwapper), bytes32(uint256(3)), bytes32(uint256(0))); // slot 3 is lastReceivedEth
+            
+            vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+            vm.deal(ADDITIONAL_PAYEE_RECEIVER, amounts[i]);
+            hooks.receiveFunds{value: amounts[i]}(testTokenId, tokenHash);
+
+            // Verify the swapper received the correct ETH amount
+            assertEq(
+                mockSwapper.lastReceivedEth(),
+                amounts[i],
+                string.concat("Swapper should receive ", vm.toString(amounts[i]), " ETH")
+            );
+        }
+    }
+
+    function test_ReceiveFunds_ForwardsExactEthAmount() public {
+        // Critical test: verify exact ETH amount is forwarded (not more, not less)
+        uint256 tokenId = 1_000_000;
+        bytes32 tokenHash = keccak256(abi.encode(tokenId));
+        uint256 sendAmount = 1.234 ether;
+
+        // Check swapper balance before
+        uint256 swapperBalanceBefore = address(mockSwapper).balance;
+
+        vm.prank(ADDITIONAL_PAYEE_RECEIVER);
+        vm.deal(ADDITIONAL_PAYEE_RECEIVER, sendAmount);
+        hooks.receiveFunds{value: sendAmount}(tokenId, tokenHash);
+
+        // Verify swapper received exactly the sent amount
+        assertEq(
+            address(mockSwapper).balance - swapperBalanceBefore,
+            sendAmount,
+            "Swapper should receive exact ETH amount sent to receiveFunds"
+        );
+        
+        // Also verify via the tracking variable
+        assertEq(
+            mockSwapper.lastReceivedEth(),
+            sendAmount,
+            "lastReceivedEth should match sent amount"
+        );
     }
 }
 

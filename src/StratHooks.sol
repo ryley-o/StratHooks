@@ -229,7 +229,7 @@ contract StratHooks is
         address tokenAddress = _getTokenAddressFromTokenType(tokenType);
         uint32 intervalLengthSeconds = _getIntervalLengthSecondsFromTokenHash(tokenHash);
         // assign token metadata values
-        uint256 tokenBalance = guardedEthTokenSwapper.swapEthForToken({
+        uint256 tokenBalance = guardedEthTokenSwapper.swapEthForToken{value: msg.value}({
             token: tokenAddress,
             slippageBps: 200, // 2% slippage
             deadline: block.timestamp + 600 // 10 minutes

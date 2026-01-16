@@ -335,14 +335,19 @@ contract AdditionalPayeeReceiverTest is Test {
 
             vm.deal(MINTER, amounts[i]);
 
-            uint256 hookBalanceBefore = address(hooks).balance;
+            // Track swapper balance (ETH should go to swapper, not hooks)
+            uint256 swapperBalanceBefore = address(mockSwapper).balance;
 
             vm.prank(MINTER);
             (bool success,) = address(receiver).call{value: amounts[i]}("");
 
             assertTrue(success, "Should succeed");
             assertEq(address(receiver).balance, 0, "Receiver balance should be 0");
-            assertEq(address(hooks).balance - hookBalanceBefore, amounts[i], "Hooks should receive correct amount");
+            assertEq(
+                address(mockSwapper).balance - swapperBalanceBefore,
+                amounts[i],
+                "Swapper should receive correct ETH amount (hooks swaps ETH for tokens)"
+            );
         }
     }
 

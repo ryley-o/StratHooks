@@ -11,6 +11,7 @@ import {IPMPV0} from "./interfaces/IPMPV0.sol";
 import {IPMPConfigureHook} from "./interfaces/IPMPConfigureHook.sol";
 import {IPMPAugmentHook} from "./interfaces/IPMPAugmentHook.sol";
 import {IGuardedEthTokenSwapper} from "./interfaces/IGuardedEthTokenSwapper.sol";
+import {ISlidingScaleMinter} from "./interfaces/ISlidingScaleMinter.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
@@ -100,6 +101,9 @@ contract StratHooks is
     IGuardedEthTokenSwapper public guardedEthTokenSwapper =
         IGuardedEthTokenSwapper(0x7FFc0E3F2aC6ba73ada2063D3Ad8c5aF554ED05f);
 
+    // sliding scale minter address for querying purchase prices
+    address public slidingScaleMinterAddress;
+
     // latest received token id
     uint256 public latestReceivedTokenId;
 
@@ -162,19 +166,22 @@ contract StratHooks is
      * @param keeper_ The keeper address
      * @param coreContract_ The core contract address
      * @param projectId_ The project ID
+     * @param slidingScaleMinterAddress_ The sliding scale minter address for querying purchase prices
      */
     function initialize(
         address owner_,
         address additionalPayeeReceiver_,
         address keeper_,
         address coreContract_,
-        uint256 projectId_
+        uint256 projectId_,
+        address slidingScaleMinterAddress_
     ) public initializer {
         __Ownable_init(owner_);
         __UUPSUpgradeable_init();
 
         // Initialize state variables
         additionalPayeeReceiver = additionalPayeeReceiver_;
+        slidingScaleMinterAddress = slidingScaleMinterAddress_;
 
         StratHooksStorage storage $ = _getStratHooksStorage();
         $.keeper = keeper_;
@@ -208,6 +215,15 @@ contract StratHooks is
      */
     function setGuardedEthTokenSwapper(address newGuardedEthTokenSwapper) external onlyOwner {
         guardedEthTokenSwapper = IGuardedEthTokenSwapper(newGuardedEthTokenSwapper);
+    }
+
+    /**
+     * @notice Set the sliding scale minter address
+     * @dev Only the owner can set the sliding scale minter address
+     * @param newSlidingScaleMinterAddress The new sliding scale minter address
+     */
+    function setSlidingScaleMinterAddress(address newSlidingScaleMinterAddress) external onlyOwner {
+        slidingScaleMinterAddress = newSlidingScaleMinterAddress;
     }
 
     /**
@@ -310,9 +326,9 @@ contract StratHooks is
         uint256 tokenId,
         IWeb3Call.TokenParam[] calldata tokenParams
     ) external view override returns (IWeb3Call.TokenParam[] memory augmentedTokenParams) {
-        // we keep all existing token params, and append 19 items (7 metadata + 12 price history)
+        // we keep all existing token params, and append 20 items (8 metadata + 12 price history)
         uint256 originalLength = tokenParams.length;
-        augmentedTokenParams = new IWeb3Call.TokenParam[](originalLength + 19);
+        augmentedTokenParams = new IWeb3Call.TokenParam[](originalLength + 20);
         for (uint256 i = 0; i < originalLength; i++) {
             augmentedTokenParams[i] = tokenParams[i];
         }
@@ -340,6 +356,13 @@ contract StratHooks is
         address tokenOwner = IERC721(coreContract).ownerOf(tokenId);
         augmentedTokenParams[originalLength + 6] =
             IWeb3Call.TokenParam({key: "ownerAddress", value: Strings.toHexString(uint160(tokenOwner), 20)});
+        // append purchase price from minter (0 if minter not set or token not found)
+        uint256 purchasePrice = 0;
+        if (slidingScaleMinterAddress != address(0)) {
+            purchasePrice = ISlidingScaleMinter(slidingScaleMinterAddress).getTokenPricePaid(coreContract, tokenId);
+        }
+        augmentedTokenParams[originalLength + 7] =
+            IWeb3Call.TokenParam({key: "purchasePrice", value: purchasePrice.toString()});
         // append token token price history (up to 12 entries, 0 if not available)
         for (uint256 i = 0; i < 12; i++) {
             string memory priceValue;
@@ -348,7 +371,7 @@ contract StratHooks is
             } else {
                 priceValue = "0";
             }
-            augmentedTokenParams[originalLength + 7 + i] =
+            augmentedTokenParams[originalLength + 8 + i] =
                 IWeb3Call.TokenParam({key: string.concat("priceHistory", i.toString()), value: priceValue});
         }
 

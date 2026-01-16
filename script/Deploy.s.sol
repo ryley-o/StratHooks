@@ -18,6 +18,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
  * - KEEPER_ADDRESS: The keeper address
  * - CORE_CONTRACT_ADDRESS: The core contract address
  * - PROJECT_ID: The project ID
+ * - SLIDING_SCALE_MINTER_ADDRESS: The sliding scale minter address (for purchase price queries)
  */
 contract DeployScript is Script {
     function run() external {
@@ -30,6 +31,7 @@ contract DeployScript is Script {
         address keeper = vm.envAddress("KEEPER_ADDRESS");
         address coreContract = vm.envAddress("CORE_CONTRACT_ADDRESS");
         uint256 projectId = vm.envUint("PROJECT_ID");
+        address slidingScaleMinterAddress = vm.envAddress("SLIDING_SCALE_MINTER_ADDRESS");
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -39,7 +41,13 @@ contract DeployScript is Script {
 
         // Prepare initializer data
         bytes memory initData = abi.encodeWithSelector(
-            StratHooks.initialize.selector, owner, additionalPayeeReceiver, keeper, coreContract, projectId
+            StratHooks.initialize.selector,
+            owner,
+            additionalPayeeReceiver,
+            keeper,
+            coreContract,
+            projectId,
+            slidingScaleMinterAddress
         );
 
         // Deploy proxy
@@ -60,6 +68,7 @@ contract DeployScript is Script {
         console.log("Keeper:", keeper);
         console.log("Core Contract:", coreContract);
         console.log("Project ID:", projectId);
+        console.log("Sliding Scale Minter:", slidingScaleMinterAddress);
     }
 }
 

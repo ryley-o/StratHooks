@@ -8,6 +8,7 @@ import {IPMPV0} from "../src/interfaces/IPMPV0.sol";
 import {IPMPAugmentHook} from "../src/interfaces/IPMPAugmentHook.sol";
 import {IPMPConfigureHook} from "../src/interfaces/IPMPConfigureHook.sol";
 import {IGuardedEthTokenSwapper} from "../src/interfaces/IGuardedEthTokenSwapper.sol";
+import {ISlidingScaleMinter} from "../src/interfaces/ISlidingScaleMinter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -179,11 +180,30 @@ contract MockGuardedEthTokenSwapper is IGuardedEthTokenSwapper {
     }
 }
 
+// Mock Sliding Scale Minter for testing
+contract MockSlidingScaleMinter is ISlidingScaleMinter {
+    mapping(address => mapping(uint256 => uint256)) private _tokenPricePaid;
+
+    function setTokenPricePaid(address coreContract, uint256 tokenId, uint256 price) external {
+        _tokenPricePaid[coreContract][tokenId] = price;
+    }
+
+    function getTokenPricePaid(address coreContract, uint256 tokenId)
+        external
+        view
+        override
+        returns (uint256 pricePaidInWei)
+    {
+        return _tokenPricePaid[coreContract][tokenId];
+    }
+}
+
 contract StratHooksTest is Test {
     StratHooks public hooks;
     MockGuardedEthTokenSwapper public mockSwapper;
     MockERC721 public mockNFT;
     MockERC20 public mockToken;
+    MockSlidingScaleMinter public mockMinter;
 
     address constant MOCK_CORE_CONTRACT = address(0x1);
     uint256 constant PROJECT_ID = 1;
@@ -201,13 +221,20 @@ contract StratHooksTest is Test {
         mockSwapper = new MockGuardedEthTokenSwapper();
         mockNFT = new MockERC721();
         mockToken = new MockERC20();
+        mockMinter = new MockSlidingScaleMinter();
 
         // Deploy implementation
         StratHooks implementation = new StratHooks();
 
         // Prepare initializer data
         bytes memory initData = abi.encodeWithSelector(
-            StratHooks.initialize.selector, OWNER, ADDITIONAL_PAYEE_RECEIVER, KEEPER, address(mockNFT), PROJECT_ID
+            StratHooks.initialize.selector,
+            OWNER,
+            ADDITIONAL_PAYEE_RECEIVER,
+            KEEPER,
+            address(mockNFT),
+            PROJECT_ID,
+            address(mockMinter)
         );
 
         // Deploy proxy
@@ -598,8 +625,8 @@ contract StratHooksTest is Test {
         IWeb3Call.TokenParam[] memory augmented =
             hooks.onTokenPMPReadAugmentation(address(mockNFT), MOCK_TOKEN_ID, params);
 
-        // Implementation now adds 19 parameters (7 metadata + 12 price history entries, even if token not initialized)
-        assertEq(augmented.length, params.length + 19, "Should add 19 parameters");
+        // Implementation now adds 20 parameters (8 metadata + 12 price history entries, even if token not initialized)
+        assertEq(augmented.length, params.length + 20, "Should add 20 parameters");
         // First param should still be the original
         assertEq(augmented[0].key, params[0].key);
         assertEq(augmented[0].value, params[0].value);
@@ -611,10 +638,102 @@ contract StratHooksTest is Test {
         assertEq(augmented[5].key, "priceHistoryLength");
         assertEq(augmented[6].key, "withdrawnAt");
         assertEq(augmented[7].key, "ownerAddress");
-        // Verify price history keys start at index 8
+        assertEq(augmented[8].key, "purchasePrice");
+        // Verify price history keys start at index 9
         for (uint256 i = 0; i < 12; i++) {
-            assertEq(augmented[8 + i].key, string.concat("priceHistory", vm.toString(i)));
+            assertEq(augmented[9 + i].key, string.concat("priceHistory", vm.toString(i)));
         }
+    }
+
+    function test_OnTokenPMPReadAugmentation_PurchasePrice() public {
+        uint256 tokenId = 1_000_000;
+        uint256 purchasePrice = 0.5 ether;
+
+        // Setup: Set the purchase price in the mock minter
+        mockMinter.setTokenPricePaid(address(mockNFT), tokenId, purchasePrice);
+        mockNFT.mint(TOKEN_OWNER, tokenId);
+
+        // Check purchase price is injected
+        IWeb3Call.TokenParam[] memory params = new IWeb3Call.TokenParam[](0);
+        IWeb3Call.TokenParam[] memory augmented = hooks.onTokenPMPReadAugmentation(address(mockNFT), tokenId, params);
+
+        // Find purchasePrice param (index 7 when no original params)
+        assertEq(augmented[7].key, "purchasePrice");
+        assertEq(augmented[7].value, vm.toString(purchasePrice), "purchasePrice should match minter value");
+    }
+
+    function test_OnTokenPMPReadAugmentation_PurchasePrice_ZeroWhenNotSet() public {
+        uint256 tokenId = 1_000_000;
+
+        // Don't set any purchase price in minter
+        mockNFT.mint(TOKEN_OWNER, tokenId);
+
+        // Check purchase price is 0
+        IWeb3Call.TokenParam[] memory params = new IWeb3Call.TokenParam[](0);
+        IWeb3Call.TokenParam[] memory augmented = hooks.onTokenPMPReadAugmentation(address(mockNFT), tokenId, params);
+
+        assertEq(augmented[7].key, "purchasePrice");
+        assertEq(augmented[7].value, "0", "purchasePrice should be 0 when not set");
+    }
+
+    function test_OnTokenPMPReadAugmentation_PurchasePrice_ZeroWhenMinterNotSet() public {
+        uint256 tokenId = 1_000_000;
+        mockNFT.mint(TOKEN_OWNER, tokenId);
+
+        // Unset the minter address
+        vm.prank(OWNER);
+        hooks.setSlidingScaleMinterAddress(address(0));
+
+        // Check purchase price is 0 when minter not configured
+        IWeb3Call.TokenParam[] memory params = new IWeb3Call.TokenParam[](0);
+        IWeb3Call.TokenParam[] memory augmented = hooks.onTokenPMPReadAugmentation(address(mockNFT), tokenId, params);
+
+        assertEq(augmented[7].key, "purchasePrice");
+        assertEq(augmented[7].value, "0", "purchasePrice should be 0 when minter not set");
+    }
+
+    function test_OnTokenPMPReadAugmentation_PurchasePrice_VariousPrices() public {
+        // Test with various price values
+        uint256[] memory prices = new uint256[](5);
+        prices[0] = 0.01 ether;
+        prices[1] = 0.1 ether;
+        prices[2] = 1 ether;
+        prices[3] = 10 ether;
+        prices[4] = 123.456789 ether;
+
+        for (uint256 i = 0; i < prices.length; i++) {
+            uint256 tokenId = 1_000_000 + i;
+            mockMinter.setTokenPricePaid(address(mockNFT), tokenId, prices[i]);
+            mockNFT.mint(TOKEN_OWNER, tokenId);
+
+            IWeb3Call.TokenParam[] memory params = new IWeb3Call.TokenParam[](0);
+            IWeb3Call.TokenParam[] memory augmented =
+                hooks.onTokenPMPReadAugmentation(address(mockNFT), tokenId, params);
+
+            assertEq(augmented[7].key, "purchasePrice");
+            assertEq(
+                augmented[7].value,
+                vm.toString(prices[i]),
+                string.concat("purchasePrice should match ", vm.toString(prices[i]))
+            );
+        }
+    }
+
+    function test_SetSlidingScaleMinterAddress() public {
+        address newMinter = address(0x999);
+
+        vm.prank(OWNER);
+        hooks.setSlidingScaleMinterAddress(newMinter);
+
+        assertEq(hooks.slidingScaleMinterAddress(), newMinter, "Minter address should be updated");
+    }
+
+    function test_SetSlidingScaleMinterAddress_RevertsNonOwner() public {
+        address newMinter = address(0x999);
+
+        vm.prank(address(0x123));
+        vm.expectRevert();
+        hooks.setSlidingScaleMinterAddress(newMinter);
     }
 
     // ============================================
@@ -1295,10 +1414,10 @@ contract StratHooksTest is Test {
 
         for (uint256 i = 0; i < amounts.length; i++) {
             uint256 testTokenId = tokenId + i;
-            
+
             // Reset lastReceivedEth
             vm.store(address(mockSwapper), bytes32(uint256(3)), bytes32(uint256(0))); // slot 3 is lastReceivedEth
-            
+
             vm.prank(ADDITIONAL_PAYEE_RECEIVER);
             vm.deal(ADDITIONAL_PAYEE_RECEIVER, amounts[i]);
             hooks.receiveFunds{value: amounts[i]}(testTokenId, tokenHash);
@@ -1331,13 +1450,9 @@ contract StratHooksTest is Test {
             sendAmount,
             "Swapper should receive exact ETH amount sent to receiveFunds"
         );
-        
+
         // Also verify via the tracking variable
-        assertEq(
-            mockSwapper.lastReceivedEth(),
-            sendAmount,
-            "lastReceivedEth should match sent amount"
-        );
+        assertEq(mockSwapper.lastReceivedEth(), sendAmount, "lastReceivedEth should match sent amount");
     }
 }
 

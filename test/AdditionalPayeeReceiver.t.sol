@@ -218,7 +218,8 @@ contract AdditionalPayeeReceiverTest is Test {
             address(0), // Will set this to receiver after deployment
             KEEPER,
             address(mockCore),
-            PROJECT_ID
+            PROJECT_ID,
+            address(0) // No minter for these tests
         );
 
         // Deploy proxy

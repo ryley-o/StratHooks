@@ -439,7 +439,7 @@ contract AdditionalPayeeReceiverTest is Test {
         address(receiver).call{value: 1 ether}("");
 
         // Assert: Check token metadata was created in StratHooks
-        (StratHooks.TokenType tokenType, uint256 balance, uint128 createdAt, uint32 intervalLength, bool isWithdrawn) =
+        (StratHooks.TokenType tokenType, uint256 balance, uint128 createdAt, uint32 intervalLength, bool isWithdrawn,) =
             hooks.tokenMetadata(tokenId);
 
         assertTrue(balance > 0, "Token should have balance");

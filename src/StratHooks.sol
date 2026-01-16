@@ -128,6 +128,7 @@ contract StratHooks is
         uint128 createdAt; // timestamp when the token was created/first price history entry
         uint32 intervalLengthSeconds; // length of each interval in seconds (12 intervals is total length)
         bool isWithdrawn; // whether the token balance has been withdrawn (after all 12 rounds have been performed)
+        uint128 withdrawnAt; // timestamp when the token was withdrawn (0 if not withdrawn)
     }
 
     // mapping of token id to token metadata
@@ -275,6 +276,7 @@ contract StratHooks is
         // EFFECTS
         // set the token to withdrawn
         t.isWithdrawn = true;
+        t.withdrawnAt = uint128(block.timestamp);
         // INTERACTIONS
         // send the token balance to the token owner
         address tokenOwner = IERC721(CORE_CONTRACT_ADDRESS()).ownerOf(tokenId);
@@ -308,9 +310,9 @@ contract StratHooks is
         uint256 tokenId,
         IWeb3Call.TokenParam[] calldata tokenParams
     ) external view override returns (IWeb3Call.TokenParam[] memory augmentedTokenParams) {
-        // we keep all existing token params, and append 17 items (5 metadata + 12 price history)
+        // we keep all existing token params, and append 19 items (7 metadata + 12 price history)
         uint256 originalLength = tokenParams.length;
-        augmentedTokenParams = new IWeb3Call.TokenParam[](originalLength + 17);
+        augmentedTokenParams = new IWeb3Call.TokenParam[](originalLength + 19);
         for (uint256 i = 0; i < originalLength; i++) {
             augmentedTokenParams[i] = tokenParams[i];
         }
@@ -331,6 +333,13 @@ contract StratHooks is
         uint256 priceHistoryLength = t.priceHistory.length;
         augmentedTokenParams[originalLength + 4] =
             IWeb3Call.TokenParam({key: "priceHistoryLength", value: priceHistoryLength.toString()});
+        // append withdrawal timestamp (0 if not withdrawn)
+        augmentedTokenParams[originalLength + 5] =
+            IWeb3Call.TokenParam({key: "withdrawnAt", value: t.withdrawnAt.toString()});
+        // append owner address
+        address tokenOwner = IERC721(coreContract).ownerOf(tokenId);
+        augmentedTokenParams[originalLength + 6] =
+            IWeb3Call.TokenParam({key: "ownerAddress", value: Strings.toHexString(uint160(tokenOwner), 20)});
         // append token token price history (up to 12 entries, 0 if not available)
         for (uint256 i = 0; i < 12; i++) {
             string memory priceValue;
@@ -339,7 +348,7 @@ contract StratHooks is
             } else {
                 priceValue = "0";
             }
-            augmentedTokenParams[originalLength + 5 + i] =
+            augmentedTokenParams[originalLength + 7 + i] =
                 IWeb3Call.TokenParam({key: string.concat("priceHistory", i.toString()), value: priceValue});
         }
 

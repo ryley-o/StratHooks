@@ -2,6 +2,14 @@
 
 A Foundry-based implementation of Art Blocks PostMintParameter hooks for custom token parameter handling.
 
+## Deployments
+
+### mainnet
+
+StratHooks.sol: `0x9a3f4307b1d12aeA5E2633e6e10Fb3cf9Ac81F9a` (UUPS proxy)
+
+AdditionalPayeeReceiver: `0x27f798fCdD4414bf9545ACDdcE413D50cD4F379F`
+
 ## Overview
 
 StratHooks implements both `AbstractPMPAugmentHook` and `AbstractPMPConfigureHook` from the Art Blocks contracts to provide custom PostMintParameter (PMP) functionality. This allows for:
@@ -41,6 +49,7 @@ StratHooks implements both `AbstractPMPAugmentHook` and `AbstractPMPConfigureHoo
 ### Dependencies
 
 This project uses:
+
 - **Solidity**: 0.8.22
 - **OpenZeppelin v5.0.0**: Installed as submodule in `lib/openzeppelin-contracts`
 - **Chainlink Brownie Contracts v1.2.0**: Installed as submodule in `lib/chainlink-brownie-contracts` (Automation interfaces)
@@ -52,6 +61,7 @@ This project uses:
 ### GuardedEthTokenSwapper
 
 The [GuardedEthTokenSwapper](https://github.com/ryley-o/GuardedEthTokenSwapper) is a production-ready contract deployed on Ethereum mainnet that provides:
+
 - **MEV Protection**: Uses Chainlink oracles to prevent sandwich attacks
 - **ETH → ERC20 Swaps**: Optimized for ETH pairs with Uniswap V3
 - **14 Supported Tokens**: WBTC, LINK, UNI, AAVE, and more
@@ -61,6 +71,7 @@ The [GuardedEthTokenSwapper](https://github.com/ryley-o/GuardedEthTokenSwapper) 
 This contract can be integrated into your StratHooks to enable secure token swaps as part of the post-mint parameter configuration flow.
 
 **Usage Example:**
+
 ```solidity
 import {IGuardedEthTokenSwapper} from "guarded-eth-token-swapper/IGuardedEthTokenSwapper.sol";
 
@@ -78,12 +89,14 @@ StratHooks implements the [Chainlink AutomationCompatibleInterface](https://docs
 - **Extensible**: Override `_shouldPerformUpkeep()` and `_performTokenUpkeep()` for custom logic
 
 **Key Features:**
+
 - **Round-based Execution**: Each token maintains a `round` counter that increments after each upkeep
 - **Duplicate Prevention**: Tracks executed rounds to prevent duplicate execution
 - **Stale Protection**: Validates that upkeep data matches current round before execution
 - **Per-Token Tracking**: Maintains independent state for each token
 
 **Implementation Pattern:**
+
 ```solidity
 // Override to define when upkeep is needed
 function _shouldPerformUpkeep(uint256 tokenId) internal view override returns (bool) {
@@ -102,6 +115,7 @@ See the [Chainlink Automation documentation](https://docs.chain.link/chainlink-a
 ### Why Local Art Blocks Contracts?
 
 The Art Blocks PMP hook contracts are copied locally rather than used as a submodule because:
+
 1. The PMP hooks are only available on the main branch, not in tagged releases
 2. We need to modify import paths to use Solady's SSTORE2 instead of their bundled version
 3. This gives us full control without modifying external git submodules
@@ -162,6 +176,7 @@ The main contract implements multiple interfaces and provides extensible hooks:
 
 **`onTokenPMPConfigure`**
 Called when a user configures PostMintParameters for their token. Use this to:
+
 - Validate parameter values
 - Check ownership or permissions
 - Enforce custom business logic
@@ -170,6 +185,7 @@ Revert to reject the configuration.
 
 **`onTokenPMPReadAugmentation`**
 Called when token parameters are read. Use this to:
+
 - Inject additional parameters
 - Modify existing parameters
 - Filter out parameters
@@ -179,18 +195,21 @@ Returns the augmented parameter array.
 #### Chainlink Automation Interface
 
 **`checkUpkeep(bytes calldata checkData)`**
+
 - Called off-chain by Chainlink Automation nodes
 - Input: ABI-encoded `uint256 tokenId`
 - Returns: `(bool upkeepNeeded, bytes memory performData)`
 - The `performData` encodes `(uint256 tokenId, uint256 round)` for idempotency
 
 **`performUpkeep(bytes calldata performData)`**
+
 - Called on-chain when `checkUpkeep` returns `true`
 - Input: ABI-encoded `(uint256 tokenId, uint256 round)`
 - Ensures idempotency through round tracking
 - Prevents stale and duplicate executions
 
 **Protected Helper Functions** (override these in your implementation):
+
 - `_shouldPerformUpkeep(uint256 tokenId)`: Define upkeep conditions
 - `_performTokenUpkeep(uint256 tokenId, uint256 round)`: Define upkeep actions
 
@@ -218,6 +237,7 @@ remappings = [
 ```
 
 **Note:** Art Blocks contracts do NOT use remappings. They are imported directly as local files:
+
 - `src/abstract/AbstractPMPAugmentHook.sol`
 - `src/abstract/AbstractPMPConfigureHook.sol`
 - `src/interfaces/*.sol`

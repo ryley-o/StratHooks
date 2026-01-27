@@ -200,6 +200,7 @@ contract AdditionalPayeeReceiverTest is Test {
     uint256 constant BASE_TOKEN_ID = PROJECT_ID * 1_000_000;
 
     event FundsReceived(address indexed sender, uint256 amount, uint256 indexed tokenId);
+    event AllowedSenderUpdated(address indexed oldAllowedSender, address indexed newAllowedSender);
 
     function setUp() public {
         // Deploy mocks
@@ -226,8 +227,8 @@ contract AdditionalPayeeReceiverTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         hooks = StratHooks(address(proxy));
 
-        // Deploy AdditionalPayeeReceiver
-        receiver = new AdditionalPayeeReceiver(MINTER, address(mockCore), PROJECT_ID, address(hooks));
+        // Deploy AdditionalPayeeReceiver with owner
+        receiver = new AdditionalPayeeReceiver(OWNER, MINTER, address(mockCore), PROJECT_ID, address(hooks));
 
         // Set receiver as additional payee receiver in hooks
         vm.prank(OWNER);
@@ -243,10 +244,101 @@ contract AdditionalPayeeReceiverTest is Test {
     // ============================================
 
     function test_Constructor() public view {
+        assertEq(receiver.owner(), OWNER, "Owner should be OWNER");
         assertEq(receiver.allowedSender(), MINTER, "Allowed sender should be MINTER");
         assertEq(receiver.coreContract(), address(mockCore), "Core contract should match");
         assertEq(receiver.projectId(), PROJECT_ID, "Project ID should match");
         assertEq(receiver.stratHooks(), address(hooks), "StratHooks should match");
+    }
+
+    function test_Constructor_ZeroAllowedSender() public {
+        // Deploy with zero address for allowedSender (initial deployment scenario)
+        AdditionalPayeeReceiver receiverZero =
+            new AdditionalPayeeReceiver(OWNER, address(0), address(mockCore), PROJECT_ID, address(hooks));
+
+        assertEq(receiverZero.owner(), OWNER, "Owner should be OWNER");
+        assertEq(receiverZero.allowedSender(), address(0), "Allowed sender should be zero address");
+    }
+
+    // ============================================
+    // setAllowedSender Tests
+    // ============================================
+
+    function test_SetAllowedSender() public {
+        address newMinter = address(0x500);
+
+        vm.prank(OWNER);
+        receiver.setAllowedSender(newMinter);
+
+        assertEq(receiver.allowedSender(), newMinter, "Allowed sender should be updated");
+    }
+
+    function test_SetAllowedSender_EmitsEvent() public {
+        address newMinter = address(0x500);
+
+        vm.prank(OWNER);
+        vm.expectEmit(true, true, false, false);
+        emit AllowedSenderUpdated(MINTER, newMinter);
+        receiver.setAllowedSender(newMinter);
+    }
+
+    function test_SetAllowedSender_RevertsNonOwner() public {
+        address nonOwner = address(0x999);
+        address newMinter = address(0x500);
+
+        vm.prank(nonOwner);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", nonOwner));
+        receiver.setAllowedSender(newMinter);
+    }
+
+    function test_SetAllowedSender_FromZeroToMinter() public {
+        // Deploy with zero address initially
+        AdditionalPayeeReceiver receiverZero =
+            new AdditionalPayeeReceiver(OWNER, address(0), address(mockCore), PROJECT_ID, address(hooks));
+
+        assertEq(receiverZero.allowedSender(), address(0), "Should start with zero address");
+
+        // Update to actual minter
+        vm.prank(OWNER);
+        receiverZero.setAllowedSender(MINTER);
+
+        assertEq(receiverZero.allowedSender(), MINTER, "Should be updated to MINTER");
+    }
+
+    function test_SetAllowedSender_UpdateAllowsNewSender() public {
+        address newMinter = address(0x500);
+
+        // Setup token
+        uint256 invocations = 1;
+        uint256 tokenId = BASE_TOKEN_ID;
+        bytes32 hash = keccak256("token");
+        mockCore.setProjectInvocations(PROJECT_ID, invocations);
+        mockCore.setTokenHash(tokenId, hash);
+
+        // Update allowed sender
+        vm.prank(OWNER);
+        receiver.setAllowedSender(newMinter);
+
+        // New sender should be able to send funds
+        vm.deal(newMinter, 1 ether);
+        vm.prank(newMinter);
+        (bool success,) = address(receiver).call{value: 1 ether}("");
+
+        assertTrue(success, "New minter should be able to send funds");
+    }
+
+    function test_SetAllowedSender_OldSenderReverts() public {
+        address newMinter = address(0x500);
+
+        // Update allowed sender
+        vm.prank(OWNER);
+        receiver.setAllowedSender(newMinter);
+
+        // Old sender should now be rejected
+        vm.deal(MINTER, 1 ether);
+        vm.prank(MINTER);
+        vm.expectRevert(abi.encodeWithSelector(AdditionalPayeeReceiver.UnauthorizedSender.selector, MINTER));
+        address(receiver).call{value: 1 ether}("");
     }
 
     // ============================================

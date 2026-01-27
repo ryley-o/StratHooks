@@ -5,15 +5,16 @@ pragma solidity 0.8.24;
 
 import {IGenArt721CoreContractV3_Base} from "./interfaces/IGenArt721CoreContractV3_Base.sol";
 import {StratHooks} from "./StratHooks.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title AdditionalPayeeReceiver
  * @author Art Blocks Inc. & Contributors
  * @notice This contract receives funds from mints and distributes them appropriately.
  * Assumes the core contract will only mint one token at a time, so latest invocation is mint to be funded atomically.
- * @dev Only accepts funds from the configured allowed sender (core contract).
+ * @dev Only accepts funds from the configured allowed sender (minter contract).
  */
-contract AdditionalPayeeReceiver {
+contract AdditionalPayeeReceiver is Ownable {
     // ============================================
     // Events
     // ============================================
@@ -26,12 +27,23 @@ contract AdditionalPayeeReceiver {
      */
     event FundsReceived(address indexed sender, uint256 amount, uint256 indexed tokenId);
 
+    /**
+     * @notice Emitted when the allowed sender is updated
+     * @param oldAllowedSender The previous allowed sender address
+     * @param newAllowedSender The new allowed sender address
+     */
+    event AllowedSenderUpdated(address indexed oldAllowedSender, address indexed newAllowedSender);
+
     // ============================================
-    // Immutable State Variables
+    // State Variables
     // ============================================
 
     /// @notice The only address allowed to send funds to this contract
-    address public immutable allowedSender;
+    address public allowedSender;
+
+    // ============================================
+    // Immutable State Variables
+    // ============================================
 
     /// @notice The core contract address for this project
     address public immutable coreContract;
@@ -55,16 +67,38 @@ contract AdditionalPayeeReceiver {
 
     /**
      * @notice Constructor
-     * @param allowedSender_ The address of the only allowed sender - expected to be the minter contract
+     * @param owner_ The owner address who can update allowedSender
+     * @param allowedSender_ The address of the only allowed sender - expected to be the minter contract (can be zero initially)
      * @param coreContract_ The address of the core contract
      * @param projectId_ The project ID
      * @param stratHooks_ The address of the strat hooks contract
      */
-    constructor(address allowedSender_, address coreContract_, uint256 projectId_, address stratHooks_) {
+    constructor(
+        address owner_,
+        address allowedSender_,
+        address coreContract_,
+        uint256 projectId_,
+        address stratHooks_
+    ) Ownable(owner_) {
         allowedSender = allowedSender_;
         coreContract = coreContract_;
         projectId = projectId_;
         stratHooks = stratHooks_;
+    }
+
+    // ============================================
+    // Owner Functions
+    // ============================================
+
+    /**
+     * @notice Update the allowed sender address
+     * @dev Only callable by the owner
+     * @param newAllowedSender The new allowed sender address
+     */
+    function setAllowedSender(address newAllowedSender) external onlyOwner {
+        address oldAllowedSender = allowedSender;
+        allowedSender = newAllowedSender;
+        emit AllowedSenderUpdated(oldAllowedSender, newAllowedSender);
     }
 
     // ============================================

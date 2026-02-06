@@ -256,15 +256,21 @@ contract MainnetForkMintTest is Test {
         console.log("Calling purchase(selector 0xae77c237) from artist wallet with", MINT_PRICE, "wei");
         console.log("");
 
-        // Record balances before
+        // Record balances before (for summary; exclude gas by using mint price as ETH movement)
         uint256 artistEthBefore = ARTIST_WALLET.balance;
 
         (bool purchaseSuccess, bytes memory purchaseReturnData) = address(minter).call{value: MINT_PRICE}(
             abi.encodeWithSelector(PURCHASE_SELECTOR, PROJECT_ID, CORE_CONTRACT)
         );
 
+        uint256 mintedTokenId;
+        StratHooks.TokenType summaryTokenType;
+        uint256 summaryTokenBalance;
+        bool haveTokenMetadata;
+
         if (purchaseSuccess) {
             uint256 tokenId = abi.decode(purchaseReturnData, (uint256));
+            mintedTokenId = tokenId;
             console.log("SUCCESS! Token minted with ID:", tokenId);
             console.log("");
 
@@ -293,7 +299,7 @@ contract MainnetForkMintTest is Test {
                 }
             } catch {}
 
-            // Check token metadata in StratHooks
+            // Check token metadata in StratHooks (and capture for summary)
             try hooks.tokenMetadata(tokenId) returns (
                 StratHooks.TokenType tokenType,
                 uint256 tokenBalance,
@@ -302,6 +308,9 @@ contract MainnetForkMintTest is Test {
                 bool, /* isWithdrawn */
                 uint128 /* withdrawnAt */
             ) {
+                summaryTokenType = tokenType;
+                summaryTokenBalance = tokenBalance;
+                haveTokenMetadata = true;
                 console.log("Token Type:", uint256(tokenType));
                 console.log("Token Balance:", tokenBalance);
                 console.log("Created At:", createdAt);
@@ -321,8 +330,26 @@ contract MainnetForkMintTest is Test {
             }
         }
 
-        vm.stopPrank();
+        // Summary: balance changes (excluding gas) and token purchased
         console.log("");
+        console.log("--- SUMMARY (balance changes excluding gas) ---");
+        if (purchaseSuccess) {
+            console.log("ETH: Artist paid mint price:", MINT_PRICE, "wei (0.015 ETH)");
+            console.log("Token purchased: NFT token ID:", mintedTokenId);
+            if (haveTokenMetadata) {
+                console.log(
+                    "StratHooks ERC20 for this token: type index",
+                    uint256(summaryTokenType),
+                    "balance",
+                    summaryTokenBalance
+                );
+            }
+        } else {
+            console.log("No purchase; no ETH or token balance changes from mint.");
+        }
+        console.log("");
+
+        vm.stopPrank();
         console.log("=== TEST COMPLETE ===");
     }
 

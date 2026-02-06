@@ -4,11 +4,17 @@ A Foundry-based implementation of Art Blocks PostMintParameter hooks for custom 
 
 ## Deployments
 
-### mainnet
+### Mainnet
 
-StratHooks.sol: `0x9a3f4307b1d12aeA5E2633e6e10Fb3cf9Ac81F9a` (UUPS proxy)
+| Contract | Address |
+|----------|---------|
+| StratHooks Proxy (UUPS) | `0x9a3f4307b1d12aeA5E2633e6e10Fb3cf9Ac81F9a` |
+| StratHooksV2 Implementation | `0x828665d0f1b7b264083a6dbe40123d5506249a80` |
+| AdditionalPayeeReceiver | `0x27f798fCdD4414bf9545ACDdcE413D50cD4F379F` |
 
-AdditionalPayeeReceiver: `0x27f798fCdD4414bf9545ACDdcE413D50cD4F379F`
+**Implementation History:**
+- V1: `0x82a0ae1e6791e2a4d02ab7147c867f921fb6aa21` (initial deployment)
+- V2: `0x828665d0f1b7b264083a6dbe40123d5506249a80` (current - bug fixes)
 
 ## Overview
 
@@ -17,11 +23,36 @@ StratHooks implements both `AbstractPMPAugmentHook` and `AbstractPMPConfigureHoo
 - **Configure Hooks**: Validate parameters when users configure their tokens
 - **Augment Hooks**: Inject or modify parameters when tokens are read
 
+## V2 Upgrade
+
+StratHooksV2 is an upgraded implementation that fixes critical bugs in the Chainlink Automation integration:
+
+### Bug Fixes
+
+| Issue | V1 Behavior | V2 Fix |
+|-------|-------------|--------|
+| Upkeep on uninitialized tokens | `performUpkeep` allowed when `createdAt=0` | `require(t.createdAt != 0, "Token not initialized")` |
+| Terminal condition | `if (currentRound == 12) continue` | `if (currentRound >= 12) continue` |
+| Double receive | No check | `require(tokenMetadata[tokenId].createdAt == 0, "Token already initialized")` |
+
+### Migration
+
+The V2 upgrade includes a one-time migration (`initializeV2RepairToken0`) that repairs token 0's corrupted price history by keeping only the last entry (the correct post-receiveFunds baseline price).
+
+### Upgrade Process
+
+See [script/UpgradeToV2.s.sol](script/UpgradeToV2.s.sol) for the upgrade scripts. Two options available:
+
+1. **Two-step upgrade** (recommended): Deploy implementation with any wallet, then owner calls `upgradeToAndCall` via Etherscan
+2. **One-step upgrade**: Owner deploys and upgrades in single transaction
+
 ## Project Structure
 
 ```
 ├── src/
-│   ├── StratHooks.sol          # Main hook implementation
+│   ├── StratHooks.sol          # Main hook implementation (V1)
+│   ├── StratHooksV2.sol        # Upgraded implementation with bug fixes
+│   ├── AdditionalPayeeReceiver.sol  # Receives mint funds and forwards to StratHooks
 │   ├── abstract/               # Abstract base contracts
 │   │   ├── AbstractPMPAugmentHook.sol
 │   │   └── AbstractPMPConfigureHook.sol
@@ -29,15 +60,24 @@ StratHooks implements both `AbstractPMPAugmentHook` and `AbstractPMPConfigureHoo
 │   │   ├── IWeb3Call.sol
 │   │   ├── IPMPV0.sol
 │   │   ├── IPMPAugmentHook.sol
-│   │   └── IPMPConfigureHook.sol
+│   │   ├── IPMPConfigureHook.sol
+│   │   ├── IGuardedEthTokenSwapper.sol
+│   │   └── ISlidingScaleMinter.sol
 │   └── libs/                   # Libraries
 │       └── ImmutableStringArray.sol
 ├── test/
-│   └── StratHooks.t.sol        # Test suite
+│   ├── StratHooks.t.sol        # V1 test suite
+│   ├── StratHooksV2.t.sol      # V2 upgrade tests
+│   ├── AdditionalPayeeReceiver.t.sol
+│   └── MainnetForkMint.t.sol   # Mainnet fork integration tests
 ├── script/
-│   └── Deploy.s.sol            # Deployment script
+│   ├── Deploy.s.sol            # Initial deployment script
+│   ├── DeployAdditionalPayeeReceiver.s.sol
+│   └── UpgradeToV2.s.sol       # V2 upgrade scripts
 ├── lib/
 │   ├── openzeppelin-contracts/     # OpenZeppelin v5.0.0
+│   ├── openzeppelin-contracts-upgradeable/  # Upgradeable contracts
+│   ├── chainlink-brownie-contracts/  # Chainlink Automation
 │   ├── solady/                     # Solady utilities (SSTORE2)
 │   ├── guarded-eth-token-swapper/  # ETH<->Token swapper with MEV protection
 │   └── forge-std/                  # Foundry standard library
@@ -50,7 +90,7 @@ StratHooks implements both `AbstractPMPAugmentHook` and `AbstractPMPConfigureHoo
 
 This project uses:
 
-- **Solidity**: 0.8.22
+- **Solidity**: 0.8.24
 - **OpenZeppelin v5.0.0**: Installed as submodule in `lib/openzeppelin-contracts`
 - **Chainlink Brownie Contracts v1.2.0**: Installed as submodule in `lib/chainlink-brownie-contracts` (Automation interfaces)
 - **Solady**: Installed as submodule in `lib/solady` (provides SSTORE2)
@@ -162,8 +202,45 @@ forge test --match-test test_OnTokenPMPConfigure
 ### Deployment
 
 ```bash
-# Deploy to a network
+# Initial deployment (new proxy + implementation)
 forge script script/Deploy.s.sol --rpc-url <your_rpc_url> --broadcast
+```
+
+### Upgrading to V2
+
+**Option 1: Two-step upgrade (recommended for security)**
+
+```bash
+# Step 1: Deploy new implementation (any wallet can do this)
+export PRIVATE_KEY=<deployer_private_key>
+export STRATHOOKS_PROXY=0x9a3f4307b1d12aea5e2633e6e10fb3cf9ac81f9a
+export ETHERSCAN_API_KEY=<your_etherscan_api_key>
+
+forge script script/UpgradeToV2.s.sol:DeployV2ImplementationScript \
+  --rpc-url $MAINNET_RPC_URL \
+  --broadcast \
+  --verify \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  -vvvv
+
+# Step 2: Owner calls upgradeToAndCall via Etherscan using the output from Step 1
+# Go to: https://etherscan.io/address/0x9a3f4307b1d12aea5e2633e6e10fb3cf9ac81f9a#writeProxyContract
+# Call upgradeToAndCall with:
+#   newImplementation: <address from script output>
+#   data: <initializeV2RepairToken0 calldata from script output>
+```
+
+**Option 2: One-step upgrade (requires owner key)**
+
+```bash
+export PRIVATE_KEY=<owner_private_key>
+export STRATHOOKS_PROXY=0x9a3f4307b1d12aea5e2633e6e10fb3cf9ac81f9a
+
+forge script script/UpgradeToV2.s.sol:UpgradeToV2Script \
+  --rpc-url $MAINNET_RPC_URL \
+  --broadcast \
+  --verify \
+  -vvvv
 ```
 
 ## Contract Details

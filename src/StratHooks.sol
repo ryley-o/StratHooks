@@ -233,7 +233,7 @@ contract StratHooks is
      * @param tokenHash The hash of the token to receive funds for
      * @dev msg.value is the appropriate proportion of the mint price for the token
      */
-    function receiveFunds(uint256 tokenId, bytes32 tokenHash) external payable onlyAdditionalPayeeReceiver {
+    function receiveFunds(uint256 tokenId, bytes32 tokenHash) external payable virtual onlyAdditionalPayeeReceiver {
         // CHECKS
         // must receive sequentially
         require(latestReceivedTokenId == 0 || latestReceivedTokenId == tokenId - 1, "Invalid token id");
@@ -405,7 +405,13 @@ contract StratHooks is
      * @return upkeepNeeded Boolean indicating if upkeep is needed
      * @return performData ABI-encoded (uint256 tokenId, uint256 round) to pass to performUpkeep
      */
-    function checkUpkeep(bytes calldata) external view override returns (bool upkeepNeeded, bytes memory performData) {
+    function checkUpkeep(bytes calldata)
+        external
+        view
+        virtual
+        override
+        returns (bool upkeepNeeded, bytes memory performData)
+    {
         // we don't need any specific input checkData - we check all tokens here, and return the first found
 
         uint256 maxTokenId = latestReceivedTokenId;
@@ -435,16 +441,17 @@ contract StratHooks is
      * @dev This function is called on-chain by Chainlink Automation
      * @param performData ABI-encoded (uint256 tokenId, uint256 round)
      */
-    function performUpkeep(bytes calldata performData) external override onlyKeeper {
+    function performUpkeep(bytes calldata performData) external virtual override onlyKeeper {
         // CHECKS
         // Decode tokenId and round
         (uint256 tokenId, uint256 round) = abi.decode(performData, (uint256, uint256));
         // Verify this is the current round (prevents stale upkeeps)
         TokenMetadata storage t = tokenMetadata[tokenId];
         require(round == t.priceHistory.length, "Stale upkeep");
+        // verify token is not already complete
+        require(t.priceHistory.length < 12, "Already complete");
         // verify block timestamp requirements
         require(block.timestamp > t.createdAt + t.intervalLengthSeconds * round, "Block timestamp requirements not met");
-
         // EFFECTS
         // Perform the actual upkeep for the token
         // append a price history entry

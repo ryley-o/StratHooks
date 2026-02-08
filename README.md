@@ -178,6 +178,21 @@ forge build
 forge test
 ```
 
+## Environment / .env
+
+You do **not** need a `.env` file to build or run the standard test suite.
+
+Use a `.env` file (or export variables) only if you:
+
+- **Run mainnet fork tests:** set `MAINNET_RPC_URL` (e.g. from Alchemy, Infura, or another RPC provider).
+- **Deploy or run deployment scripts:** set the variables required by the script (e.g. `script/Deploy.s.sol` uses `PRIVATE_KEY`, `OWNER_ADDRESS`, `ADDITIONAL_PAYEE_RECEIVER`, `KEEPER_ADDRESS`, `CORE_CONTRACT_ADDRESS`, `PROJECT_ID`, `SLIDING_SCALE_MINTER_ADDRESS`). See each script’s `vm.env*` calls for the full list.
+
+Example `.env` for fork tests only:
+
+```bash
+MAINNET_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
+```
+
 ## Usage
 
 ### Building
@@ -189,11 +204,14 @@ forge build
 ### Testing
 
 ```bash
-# Run all tests
-forge test
+# Run all tests (excludes mainnet fork tests; no .env required)
+forge test --no-match-contract MainnetForkMintTest
 
 # Run with verbosity
-forge test -vv
+forge test -vvv --no-match-contract MainnetForkMintTest
+
+# Run mainnet fork integration tests (requires MAINNET_RPC_URL, e.g. from .env)
+forge test --match-contract MainnetForkMintTest -vvvv --fork-url $MAINNET_RPC_URL
 
 # Run specific test
 forge test --match-test test_OnTokenPMPConfigure

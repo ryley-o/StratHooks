@@ -14,6 +14,7 @@ import {IGuardedEthTokenSwapper} from "./interfaces/IGuardedEthTokenSwapper.sol"
 import {ISlidingScaleMinter} from "./interfaces/ISlidingScaleMinter.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 import {AutomationCompatibleInterface} from "@chainlink/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
@@ -43,6 +44,7 @@ contract StratHooks is
     using Strings for uint256;
     using Strings for uint128;
     using Strings for uint32;
+    using SafeERC20 for IERC20;
     // ============================================
     // Events
     // ============================================
@@ -298,7 +300,7 @@ contract StratHooks is
         address tokenOwner = IERC721(CORE_CONTRACT_ADDRESS()).ownerOf(tokenId);
         // send the token balance to the token owner
         address tokenAddress = _getTokenAddressFromTokenType(t.tokenType);
-        IERC20(tokenAddress).transfer(tokenOwner, t.tokenBalance);
+        IERC20(tokenAddress).safeTransfer(tokenOwner, t.tokenBalance);
     }
 
     /**

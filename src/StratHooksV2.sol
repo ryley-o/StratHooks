@@ -84,7 +84,14 @@ contract StratHooksV2 is StratHooks {
         // EFFECTS
         latestReceivedTokenId = tokenId;
         // assign prng values
-        TokenType tokenType = TokenType(uint256(tokenHash) % 14); // 14 token types
+        // ------------------------------------------------------------
+        // update 2026-02-10: remove possibility of BAT token type, due to low liquidity in pool
+        uint256 tokenTypeUint = uint256(tokenHash) % 14; // 14 token types
+        if (tokenTypeUint == 3) {
+            tokenTypeUint = 11; // replace with UNI token type
+        }
+        TokenType tokenType = TokenType(tokenTypeUint);
+        // ------------------------------------------------------------
         address tokenAddress = _getTokenAddressFromTokenType(tokenType);
         uint32 intervalLengthSeconds = _getIntervalLengthSecondsFromTokenHash(tokenHash);
         // assign token metadata values
